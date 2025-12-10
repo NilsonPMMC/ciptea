@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        @page {
+            size: 54mm 86mm;
+            margin: 0;
+        }
+        body {
+            font-family: 'Arial', sans-serif; /* Fonte padrão segura */
+            margin: 0;
+            padding: 0;
+            background-color: #fff;
+        }
+
+        /* Variáveis de cor simuladas */
+        /* Azul Ciano do modelo: aprox #1ba0da */
+        
+        .card {
+            width: 54mm;
+            height: 86mm;
+            position: relative;
+            overflow: hidden;
+            page-break-after: always;
+            box-sizing: border-box;
+            
+            /* A BORDA AZUL ARREDONDADA */
+            border: 2px solid #1ba0da; 
+            border-radius: 6px; 
+            background: white;
+            /* Canto cortado visualmente simulado com padding interno se precisar */
+        }
+
+        /* === FRENTE === */
+        .front-container {
+            padding: 5px;
+            text-align: center;
+            height: 100%;
+            position: relative;
+        }
+
+        .logo-top {
+            width: 100px;
+            margin-top: 5px;
+            margin-bottom: 15px;
+        }
+
+        .title-main {
+            font-size: 20px;
+            font-weight: 900;
+            margin: 0;
+            line-height: 1;
+            text-transform: uppercase;
+            font-family: sans-serif; /* Tentar simular a fonte grossa */
+            letter-spacing: -1px;
+        }
+
+        .subtitle-main {
+            font-size: 6px;
+            color: #000;
+            margin-bottom: 8px;
+            line-height: 1.1;
+            padding: 0 10px;
+        }
+
+        /* Grid Central */
+        .content-grid {
+            display: flex;
+            align-items: flex-start;
+            padding: 0 5px;
+            margin-top: 5px;
+        }
+
+        .col-left {
+            width: 40%;
+            text-align: left;
+        }
+        .col-right {
+            width: 60%;
+            text-align: left;
+            padding-left: 5px;
+        }
+
+        .foto-moldura {
+            width: 100%;
+            height: 26mm;
+            background: #000; /* Fundo preto conforme layout */
+            object-fit: cover;
+        }
+
+        .protocolo {
+            font-size: 7px;
+            font-weight: bold;
+            margin-top: 2px;
+        }
+
+        .label { font-size: 6px; color: #333; margin-bottom: 1px; }
+        .value { font-size: 9px; font-weight: bold; color: #000; margin-bottom: 6px; line-height: 1.1; }
+        .name-value { font-size: 10px; font-weight: bold; color: #000; margin-bottom: 6px; line-height: 1.1; }
+
+        /* Rodapé Frente */
+        .footer-front {
+            position: absolute;
+            bottom: 15px;
+            width: 100%;
+            left: 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 8px;
+            box-sizing: border-box;
+        }
+
+        .badge-atendimento {
+            background-color: #1ba0da;
+            color: white;
+            font-weight: bold;
+            font-size: 6px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-bottom: 2px;
+        }
+        .lei-text { font-size: 5px; font-weight: bold; }
+
+        .logo-pref {
+            width: 60px; /* Ajuste conforme a imagem do brasão */
+        }
+
+        /* === VERSO === */
+        .back-container {
+            height: 100%;
+            position: relative;
+        }
+
+        .back-header {
+            text-align: center;
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }
+        .date-text { font-size: 8px; font-weight: bold; }
+        .validity-text { font-size: 6px; }
+
+        .back-body {
+            padding: 0 10px;
+            text-align: left;
+        }
+
+        .badge-section {
+            background-color: #1ba0da;
+            color: white;
+            font-size: 7px;
+            font-weight: bold;
+            padding: 2px 5px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-bottom: 2px;
+            margin-top: 6px;
+        }
+
+        .info-text {
+            font-size: 8px;
+            color: #000;
+            line-height: 1.2;
+        }
+        
+        .info-bold { font-weight: bold; }
+
+        .footer-back {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 15mm;
+            background-color: #1ba0da;
+            color: white;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            /* O recorte arredondado invertido é difícil em CSS puro para PDF, 
+               vamos usar o bloco sólido que é mais seguro para impressão */
+        }
+
+        .logo-footer-back {
+            width: 120px; /* Logo CIPTEA Mogi Branco */
+            margin: 0 auto;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    
+    <div class="card">
+        <div class="front-container">
+            <img src="file://{{ img_dir }}/logo_infinito_colorido.png" class="logo-top">        
+
+            <div class="content-grid">
+                <div class="col-left">
+                    {% if foto_path %}
+                        <img src="file://{{ foto_path }}" class="foto-moldura"> 
+                    {% else %}
+                        <div class="foto-moldura"></div>
+                    {% endif %}
+                    <div class="protocolo">Nº {{ solicitacao.protocolo }}</div>
+                </div>
+
+                <div class="col-right">
+                    <div class="name-value">{{ beneficiario.nome_completo|upper }}</div>
+
+                    <div class="label">CPF:</div>
+                    <div class="value">{{ beneficiario.cpf }}</div>
+
+                    <div class="label">Data de Nascimento:</div>
+                    <div class="value">{{ beneficiario.data_nascimento|date:"d/m/Y" }}</div>
+                </div>
+            </div>
+
+            <div class="footer-front">
+                <div style="text-align: center;">
+                    <div class="badge-atendimento">Atendimento Preferencial</div>
+                    <div class="lei-text">Lei Federal Nº 13.977/2020</div>
+                </div>
+                <div>
+                    <img src="file://{{ img_dir }}/brasao_mogi_preto.png" class="logo-pref">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="back-container">
+            
+            <div class="back-header">
+                <div class="date-text">Data de emissão: {{ hoje|date:"d/m/Y" }}</div>
+                <div class="validity-text">Válido por 5 anos a partir desta data</div>
+            </div>
+
+            <div class="back-body">
+                
+                <div class="badge-section">Responsável 1</div>
+                <div class="info-text info-bold">{{ responsavel1.nome|upper }}</div>
+                {% if responsavel2 %}
+                    <div class="badge-section" style="margin-top: 3px;">Responsável 2</div>
+                    <div class="info-text info-bold">{{ responsavel2.nome|upper }}</div>
+                {% else %}
+                    <div style="height: 15px;"></div>
+                {% endif %}
+
+                <div class="badge-section" style="margin-top: 5px;">Informações de contato</div>
+                <div class="info-text">{{ responsavel1.telefone }}</div>
+                
+                <div class="badge-section" style="margin-top: 5px;">Endereço</div>
+                <div class="info-text text-uppercase">
+                    {{ beneficiario.logradouro }}, {{ beneficiario.numero }}
+                </div>
+                <div class="info-text text-uppercase">{{ beneficiario.bairro }} - {{ beneficiario.cidade }}/{{ beneficiario.estado }}</div>
+            </div>
+
+            <div class="footer-back">
+                <img src="file://{{ img_dir }}/logo_ciptea_branco.png" class="logo-footer-back">
+            </div>
+        </div>
+    </div>
+</body>
+</html>
