@@ -1,0 +1,20 @@
+---
+description: Padroes para Vue 3 + Vuetify no frontend
+globs: frontend/src/**/*.{js,vue}
+alwaysApply: false
+---
+
+# Vue e Vuetify
+
+- Mantenha componentes focados; extraia logica repetida para utilitarios/composables quando necessario.
+- Preserve consistencia visual com Vuetify ja utilizado no projeto.
+- Evite mudancas amplas de layout sem solicitacao explicita.
+- Garanta feedback de interface em fluxos assincronos (loading, erro, sucesso).
+- Mantenha acessibilidade basica: labels, mensagens de erro claras e navegacao por foco.
+
+## Exemplo
+
+```vue
+<!-- Evite logica complexa inline no template -->
+<v-btn :loading="salvando" @click="salvar">Salvar</v-btn>
+```

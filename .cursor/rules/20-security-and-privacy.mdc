@@ -1,0 +1,20 @@
+---
+description: Regras de seguranca e privacidade no cliente
+globs: frontend/src/**/*.{js,vue}
+alwaysApply: false
+---
+
+# Seguranca e privacidade
+
+- Nunca hardcode `baseURL` ou endpoints; use variaveis `VITE_*`.
+- Nao exponha tokens, documentos ou dados pessoais em logs.
+- Evite `v-html`; quando inevitavel, sanitize o conteudo antes de renderizar.
+- Minimize persistencia de dados sensiveis em `localStorage`.
+- Trate erros de API sem vazar detalhes internos para o usuario final.
+
+## Exemplo
+
+```js
+// Bom: configuracao por ambiente
+const apiBase = import.meta.env.VITE_API_BASE_URL
+```

@@ -1,0 +1,153 @@
+{
+  "current_thresholds": {
+    "approve_min": 75,
+    "assist_min": 60
+  },
+  "suggested_thresholds": {
+    "approve_min": 60,
+    "assist_min": 50
+  },
+  "suggested_thresholds_by_type": {
+    "laudo": {
+      "approve_min": 75,
+      "assist_min": 60
+    },
+    "identidade": {
+      "approve_min": 50,
+      "assist_min": 40
+    },
+    "endereco": {
+      "approve_min": 75,
+      "assist_min": 65
+    }
+  },
+  "alerts": [],
+  "summary_by_type": {
+    "laudo": {
+      "count": 1,
+      "ocr_fail": 0,
+      "validation_ok": 1,
+      "overall_feature_confidences": [
+        75
+      ],
+      "feature_decisions": {
+        "APROVACAO_SUGERIDA": 1,
+        "REVISAO_ASSISTIDA": 0,
+        "REVISAO_MANUAL": 0
+      },
+      "avg_overall_feature_confidence": 75.0,
+      "min_overall_feature_confidence": 75,
+      "max_overall_feature_confidence": 75,
+      "validation_ok_rate": 100.0
+    },
+    "identidade": {
+      "count": 3,
+      "ocr_fail": 0,
+      "validation_ok": 3,
+      "overall_feature_confidences": [
+        52,
+        40,
+        73
+      ],
+      "feature_decisions": {
+        "APROVACAO_SUGERIDA": 0,
+        "REVISAO_ASSISTIDA": 1,
+        "REVISAO_MANUAL": 2
+      },
+      "avg_overall_feature_confidence": 55.0,
+      "min_overall_feature_confidence": 40,
+      "max_overall_feature_confidence": 73,
+      "validation_ok_rate": 100.0
+    },
+    "endereco": {
+      "count": 1,
+      "ocr_fail": 0,
+      "validation_ok": 0,
+      "overall_feature_confidences": [
+        78
+      ],
+      "feature_decisions": {
+        "APROVACAO_SUGERIDA": 1,
+        "REVISAO_ASSISTIDA": 0,
+        "REVISAO_MANUAL": 0
+      },
+      "avg_overall_feature_confidence": 78.0,
+      "min_overall_feature_confidence": 78,
+      "max_overall_feature_confidence": 78,
+      "validation_ok_rate": 0.0
+    }
+  },
+  "samples_total": 5,
+  "samples": [
+    {
+      "path": "/var/www/ciptea/laudo_teste.jpg",
+      "tipo": "laudo",
+      "ocr_ok": true,
+      "predicted_type": "LAUDO",
+      "classifier_confidence": 100,
+      "overall_feature_confidence": 75,
+      "feature_decision": "APROVACAO_SUGERIDA",
+      "validation_ok": true,
+      "validation_status": "APROVADO_IA",
+      "validation_reason": "CID identificado: F840",
+      "expected_ok": true,
+      "matches_expected": true
+    },
+    {
+      "path": "/var/www/ciptea/rg_nilson.jpg",
+      "tipo": "identidade",
+      "ocr_ok": true,
+      "predicted_type": "RG_BENEF",
+      "classifier_confidence": 72,
+      "overall_feature_confidence": 52,
+      "feature_decision": "REVISAO_MANUAL",
+      "validation_ok": true,
+      "validation_status": "APROVADO_IA",
+      "validation_reason": "Nome e CPF conferem com o cadastro.",
+      "expected_ok": true,
+      "matches_expected": true
+    },
+    {
+      "path": "/var/www/ciptea/rg_theo.jpeg",
+      "tipo": "identidade",
+      "ocr_ok": true,
+      "predicted_type": "RG_BENEF",
+      "classifier_confidence": 66,
+      "overall_feature_confidence": 40,
+      "feature_decision": "REVISAO_MANUAL",
+      "validation_ok": true,
+      "validation_status": "APROVADO_IA",
+      "validation_reason": "Fallback semântico (menor): nome e data de nascimento conferem no documento.",
+      "expected_ok": true,
+      "matches_expected": true
+    },
+    {
+      "path": "/var/www/ciptea/cnh_nilson.pdf",
+      "tipo": "identidade",
+      "ocr_ok": true,
+      "predicted_type": "CNH",
+      "classifier_confidence": 71,
+      "overall_feature_confidence": 73,
+      "feature_decision": "REVISAO_ASSISTIDA",
+      "validation_ok": true,
+      "validation_status": "APROVADO_IA",
+      "validation_reason": "Nome e CPF conferem com o cadastro.",
+      "expected_ok": true,
+      "matches_expected": true
+    },
+    {
+      "path": "/var/www/ciptea/comprovante_endereco.pdf",
+      "tipo": "endereco",
+      "ocr_ok": true,
+      "predicted_type": "COMP_RES",
+      "classifier_confidence": 100,
+      "overall_feature_confidence": 78,
+      "feature_decision": "APROVACAO_SUGERIDA",
+      "validation_ok": false,
+      "validation_status": "REVISAO_MANUAL",
+      "validation_reason": "Comprovante de endereco sem confianca suficiente (nome/data).",
+      "expected_ok": false,
+      "matches_expected": true
+    }
+  ]
+}

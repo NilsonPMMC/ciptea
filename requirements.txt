@@ -1,0 +1,9 @@
+python-doctr[torch]
+thefuzz
+python-Levenshtein
+sentence-transformers
+Pillow
+celery
+redis>=4.5,<6
+python-dateutil
+qrcode[pil]

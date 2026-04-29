@@ -2,13 +2,19 @@
   <v-container class="fill-height align-start pa-0 pa-md-4">
     <v-card width="100%" max-width="800" class="mx-auto mt-md-5 rounded-0 rounded-md-lg" :loading="store.loading">
       
-      <v-toolbar v-if="!store.success" color="primary" density="comfortable">
+      <v-toolbar v-if="store.fasePosEnvio !== 'final'" color="primary" density="comfortable">
         <v-btn icon="mdi-arrow-left" to="/"></v-btn>
-        <v-toolbar-title>Solicitação CIPTEA</v-toolbar-title>
+        <v-toolbar-title>
+          {{ store.fasePosEnvio === 'triagem_ia' ? 'Análise automática dos documentos' : 'Solicitação CIPTEA' }}
+        </v-toolbar-title>
       </v-toolbar>
 
       <v-fade-transition>
-        <div v-if="store.success" class="fill-height d-flex flex-column justify-center align-center text-center pa-8 bg-white" style="min-height: 400px;">
+        <div
+          v-if="store.fasePosEnvio === 'final' && store.success"
+          class="fill-height d-flex flex-column justify-center align-center text-center pa-8 bg-white triagem-surface"
+          style="min-height: 400px;"
+        >
             
             <v-icon icon="mdi-check-decagram" color="green" size="100" class="mb-4 animate__animated animate__bounceIn"></v-icon>
             
@@ -25,7 +31,7 @@
 
             <v-alert type="warning" variant="outlined" density="compact" class="mb-6 text-left max-width-500">
                 <strong>Prazo de Análise:</strong> até 3 dias úteis.<br>
-                Você receberá atualizações no WhatsApp informado.
+                Você receberá notificações de atualizaçoes.
             </v-alert>
 
             <v-btn 
@@ -40,12 +46,152 @@
         </div>
       </v-fade-transition>
 
-      <div v-if="!store.success">
-        <v-tabs v-model="step" grow color="primary" class="mb-4">
+      <v-expand-transition>
+        <div
+          v-if="store.fasePosEnvio === 'triagem_ia'"
+          class="pa-4 pa-md-6 triagem-surface triagem-panel-enter"
+        >
+          <div class="text-center mb-6">
+            <v-chip color="primary" variant="flat" size="small" class="mb-2">Etapa em tempo real</v-chip>
+            <h2 class="text-h5 font-weight-bold text-primary">Status da análise por IA</h2>
+            <p v-if="store.protocolo" class="text-body-2 text-medium-emphasis mb-0">
+              Protocolo: <strong class="text-primary">{{ store.protocolo }}</strong>
+            </p>
+          </div>
+
+          <v-card variant="tonal" color="surface-variant" class="mb-6 pa-2">
+            <v-timeline align="start" side="end" density="compact" truncate-line="both">
+              <v-timeline-item
+                v-for="item in itensValidacaoIa"
+                :key="item.key"
+                :dot-color="item.dotColor"
+                size="small"
+              >
+                <template #icon>
+                  <v-progress-circular
+                    v-if="item.status === 'analisando'"
+                    indeterminate
+                    size="20"
+                    width="2"
+                    color="primary"
+                  />
+                  <v-icon v-else-if="item.status === 'sucesso'" icon="mdi-check-circle" color="success" size="22" />
+                  <v-icon v-else-if="item.status === 'revisao_manual'" icon="mdi-account-supervisor" color="info" size="22" />
+                  <v-icon v-else icon="mdi-clock-outline" color="grey" size="22" />
+                </template>
+                <div class="text-subtitle-2 font-weight-bold">{{ item.titulo }}</div>
+                <div class="text-body-2 text-medium-emphasis">{{ item.mensagem }}</div>
+              </v-timeline-item>
+            </v-timeline>
+          </v-card>
+
+          <template v-if="store.iaResultadoGlobal">
+            <div v-if="store.iaResultadoGlobal === 'APROVADO_IA'" class="celebration-wrap mb-6">
+              <div class="confetti" aria-hidden="true">
+                <span v-for="n in 12" :key="n" class="confetti-piece" :style="{ '--d': `${n * 0.08}s` }" />
+              </div>
+              <v-banner color="success" rounded="lg" lines="two" class="elevation-2">
+                <template #prepend>
+                  <v-icon icon="mdi-party-popper" size="large" />
+                </template>
+                <div class="text-body-1">
+                  <strong>Ótimo!</strong> A triagem automática concluiu com sucesso. Você já pode seguir para a próxima etapa.
+                </div>
+              </v-banner>
+            </div>
+
+            <v-card
+              v-else-if="store.iaResultadoGlobal === 'REVISAO_MANUAL'"
+              class="mb-4"
+              variant="tonal"
+              color="warning"
+            >
+              <v-card-title class="text-subtitle-1 font-weight-bold">
+                Análise inicial concluída
+              </v-card-title>
+              <v-card-text>
+                <div class="text-body-2 mb-3">Foram identificadas divergências automáticas.</div>
+                <div
+                  v-for="d in store.triagemResposta?.resumo_divergencias || []"
+                  :key="`${d.documento}-${d.codigo}`"
+                  class="mb-2"
+                >
+                  <div class="font-weight-bold">{{ d.titulo }} - {{ d.codigo }}</div>
+                  <div class="text-body-2">{{ d.motivo }}</div>
+                </div>
+              </v-card-text>
+            </v-card>
+            <v-card
+              v-if="podeReenviarDivergentes"
+              class="mb-6"
+              variant="flat"
+              color="#455A64"
+            >
+              <v-card-title class="text-subtitle-2 font-weight-bold text-white">
+                Reenviar apenas documentos divergentes
+              </v-card-title>
+              <v-card-text>
+                <div
+                  v-for="d in divergenciasIa"
+                  :key="`${d.documento}-${d.codigo}`"
+                  class="mb-3"
+                >
+                  <v-file-input
+                    v-model="arquivosCorrecao[mapDocumentoParaAnexo(d.documento)]"
+                    :label="`Novo arquivo - ${d.titulo}`"
+                    density="comfortable"
+                    variant="outlined"
+                    prepend-icon="mdi-paperclip"
+                    accept=".pdf,.jpg,.jpeg,.png,.webp"
+                    show-size
+                    clearable
+                  />
+                </div>
+                <v-btn
+                  color="warning"
+                  prepend-icon="mdi-upload"
+                  :loading="loadingReenvioDivergente"
+                  @click="reenviarDivergentes"
+                >
+                  Reenviar
+                </v-btn>
+              </v-card-text>
+            </v-card>
+
+            <div class="d-flex flex-column flex-sm-row justify-center ga-3">
+              <v-btn
+                color="primary"
+                size="large"
+                prepend-icon="mdi-arrow-right-circle"
+                @click="store.finalizarFaseTriagemVisual()"
+              >
+                Prosseguir
+              </v-btn>
+            </div>
+          </template>
+          <div v-else class="text-center text-medium-emphasis text-body-2">
+            Aguardando retorno do servidor…
+            <div class="mt-2">Você pode voltar para a tela inicial a qualquer momento.</div>
+          </div>
+        </div>
+      </v-expand-transition>
+
+      <div v-if="store.fasePosEnvio === 'form' && !store.success">
+        <v-tabs v-if="!somenteCorrecaoAnexos" v-model="step" grow color="primary" class="mb-4">
           <v-tab :value="1">1. Dados</v-tab>
           <v-tab :value="2">2. Resp.</v-tab>
           <v-tab :value="3">3. Docs</v-tab>
         </v-tabs>
+        <v-alert
+          v-else
+          type="warning"
+          variant="tonal"
+          border="start"
+          class="mx-4 mt-4 mb-0"
+        >
+          <strong>Correção de documentos</strong><br>
+          Atualize apenas os anexos sinalizados para nova análise da IA.
+        </v-alert>
 
         <v-card-text>
           <v-window v-model="step">
@@ -245,6 +391,50 @@
               <v-alert type="info" variant="tonal" class="mb-4 text-caption" density="compact">
                 Arquivos aceitos: Fotos (JPG/PNG) ou PDF.
               </v-alert>
+              <v-alert
+                v-if="isRenovacaoEdicao"
+                type="warning"
+                variant="tonal"
+                class="mb-4 text-caption"
+                density="comfortable"
+                icon="mdi-clipboard-check-outline"
+              >
+                <strong>Documentos obrigatórios para concluir a renovação:</strong><br>
+                - Laudo Médico com CID<br>
+                - RG/Certidão do Beneficiário<br>
+                - Comprovante de Residência<br>
+                <span v-if="temResponsavel">- RG/CNH do Responsável</span>
+              </v-alert>
+              <v-card v-if="isRenovacaoEdicao" variant="tonal" class="mb-4">
+                <v-card-text class="py-3">
+                  <div class="text-subtitle-2 font-weight-bold mb-2 text-grey-darken-3">
+                    Conferência rápida da renovação
+                  </div>
+                  <div class="d-flex flex-wrap" style="gap: 8px;">
+                    <v-chip :color="checklistDocs.laudo.ok ? 'success' : 'error'" size="small" variant="flat">
+                      <v-icon start :icon="checklistDocs.laudo.ok ? 'mdi-check-circle' : 'mdi-alert-circle'"></v-icon>
+                      {{ checklistDocs.laudo.label }}
+                    </v-chip>
+                    <v-chip :color="checklistDocs.rgBenef.ok ? 'success' : 'error'" size="small" variant="flat">
+                      <v-icon start :icon="checklistDocs.rgBenef.ok ? 'mdi-check-circle' : 'mdi-alert-circle'"></v-icon>
+                      {{ checklistDocs.rgBenef.label }}
+                    </v-chip>
+                    <v-chip :color="checklistDocs.compRes.ok ? 'success' : 'error'" size="small" variant="flat">
+                      <v-icon start :icon="checklistDocs.compRes.ok ? 'mdi-check-circle' : 'mdi-alert-circle'"></v-icon>
+                      {{ checklistDocs.compRes.label }}
+                    </v-chip>
+                    <v-chip
+                      v-if="temResponsavel"
+                      :color="checklistDocs.rgResp.ok ? 'success' : 'error'"
+                      size="small"
+                      variant="flat"
+                    >
+                      <v-icon start :icon="checklistDocs.rgResp.ok ? 'mdi-check-circle' : 'mdi-alert-circle'"></v-icon>
+                      {{ checklistDocs.rgResp.label }}
+                    </v-chip>
+                  </div>
+                </v-card-text>
+              </v-card>
 
               <div class="mb-4">
                   <v-file-input 
@@ -254,8 +444,12 @@
                     prepend-icon="mdi-doctor"
                     accept="image/*, application/pdf"
                     @update:model-value="files => store.anexos.laudo = files ? files : null"
+                    :disabled="somenteCorrecaoAnexos && !campoDivergente('laudo')"
+                    :color="campoDivergente('laudo') ? 'warning' : undefined"
+                    :messages="campoDivergente('laudo') ? ['Documento com divergência da IA: envie uma nova versão.'] : []"
                     :error-messages="store.statusLaudo?.status === 'REJEITADO' ? 'Documento recusado' : ''"
-                    :base-color="store.statusLaudo?.status === 'REJEITADO' ? 'error' : (store.statusLaudo?.status === 'APROVADO' ? 'success' : '')"
+                    :base-color="campoDivergente('laudo') ? 'warning' : (store.statusLaudo?.status === 'REJEITADO' ? 'error' : (store.statusLaudo?.status === 'APROVADO' ? 'success' : ''))"
+                    :class="{ 'doc-divergente': campoDivergente('laudo') }"
                   >
                       <template v-slot:append-inner v-if="store.statusLaudo?.status === 'APROVADO'">
                           <v-icon color="success" icon="mdi-check-circle" v-tooltip:top="'Documento Aceito'"></v-icon>
@@ -279,8 +473,12 @@
                     prepend-icon="mdi-card-account-details"
                     accept="image/*, application/pdf"
                     @update:model-value="files => store.anexos.rg_beneficiario = files ? files : null"
+                    :disabled="somenteCorrecaoAnexos && !campoDivergente('rg_beneficiario')"
+                    :color="campoDivergente('rg_beneficiario') ? 'warning' : undefined"
+                    :messages="campoDivergente('rg_beneficiario') ? ['Documento com divergência da IA: envie uma nova versão.'] : []"
                     :error-messages="store.statusRgBenef?.status === 'REJEITADO' ? 'Documento recusado' : ''"
-                    :base-color="store.statusRgBenef?.status === 'REJEITADO' ? 'error' : (store.statusRgBenef?.status === 'APROVADO' ? 'success' : '')"
+                    :base-color="campoDivergente('rg_beneficiario') ? 'warning' : (store.statusRgBenef?.status === 'REJEITADO' ? 'error' : (store.statusRgBenef?.status === 'APROVADO' ? 'success' : ''))"
+                    :class="{ 'doc-divergente': campoDivergente('rg_beneficiario') }"
                   >
                       <template v-slot:append-inner v-if="store.statusRgBenef?.status === 'APROVADO'">
                           <v-icon color="success" icon="mdi-check-circle"></v-icon>
@@ -303,8 +501,12 @@
                     prepend-icon="mdi-home-map-marker"
                     accept="image/*, application/pdf"
                     @update:model-value="files => store.anexos.comprovante_residencia = files ? files : null"
+                    :disabled="somenteCorrecaoAnexos && !campoDivergente('comprovante_residencia')"
+                    :color="campoDivergente('comprovante_residencia') ? 'warning' : undefined"
+                    :messages="campoDivergente('comprovante_residencia') ? ['Documento com divergência da IA: envie uma nova versão.'] : []"
                     :error-messages="store.statusCompRes?.status === 'REJEITADO' ? 'Documento recusado' : ''"
-                    :base-color="store.statusCompRes?.status === 'REJEITADO' ? 'error' : (store.statusCompRes?.status === 'APROVADO' ? 'success' : '')"
+                    :base-color="campoDivergente('comprovante_residencia') ? 'warning' : (store.statusCompRes?.status === 'REJEITADO' ? 'error' : (store.statusCompRes?.status === 'APROVADO' ? 'success' : ''))"
+                    :class="{ 'doc-divergente': campoDivergente('comprovante_residencia') }"
                   >
                       <template v-slot:append-inner v-if="store.statusCompRes?.status === 'APROVADO'">
                           <v-icon color="success" icon="mdi-check-circle"></v-icon>
@@ -329,8 +531,12 @@
                     prepend-icon="mdi-account-box"
                     accept="image/*, application/pdf"
                     @update:model-value="files => store.anexos.rg_responsavel = files ? files : null"
+                    :disabled="somenteCorrecaoAnexos && !campoDivergente('rg_responsavel')"
+                    :color="campoDivergente('rg_responsavel') ? 'warning' : undefined"
+                    :messages="campoDivergente('rg_responsavel') ? ['Documento com divergência da IA: envie uma nova versão.'] : []"
                     :error-messages="store.statusRgResp?.status === 'REJEITADO' ? 'Documento recusado' : ''"
-                    :base-color="store.statusRgResp?.status === 'REJEITADO' ? 'error' : (store.statusRgResp?.status === 'APROVADO' ? 'success' : '')"
+                    :base-color="campoDivergente('rg_responsavel') ? 'warning' : (store.statusRgResp?.status === 'REJEITADO' ? 'error' : (store.statusRgResp?.status === 'APROVADO' ? 'success' : ''))"
+                    :class="{ 'doc-divergente': campoDivergente('rg_responsavel') }"
                   >
                       <template v-slot:append-inner v-if="store.statusRgResp?.status === 'APROVADO'">
                           <v-icon color="success" icon="mdi-check-circle"></v-icon>
@@ -352,9 +558,10 @@
               </div>
               
               <div class="d-flex justify-space-between mt-4">
-                <v-btn variant="text" @click="step--">Voltar</v-btn>
+                <v-btn v-if="!somenteCorrecaoAnexos" variant="text" @click="step--">Voltar</v-btn>
+                <span v-else></span>
                 <v-btn color="success" size="large" :loading="store.loading" @click="store.enviarSolicitacao()">
-                  {{ store.modoEdicao ? 'Salvar Correções' : 'Finalizar Solicitação' }}
+                  {{ isRenovacaoEdicao ? 'Enviar Renovação' : (store.modoEdicao ? 'Salvar Correções' : 'Finalizar Solicitação') }}
                 </v-btn>
               </div>
             </v-window-item>
@@ -388,19 +595,30 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, computed, onUnmounted, watch } from 'vue';
 import { vMaska } from 'maska/vue'; 
 import { useCadastroStore } from '@/stores/cadastro';
+import { useToastStore } from '@/stores/toast';
+import { useRouter } from 'vue-router';
 import Cropper from 'cropperjs';
 import 'cropperjs/dist/cropper.css';
 import { nextTick } from 'vue';
 
 const step = ref(1);
 const store = useCadastroStore();
+const toast = useToastStore();
+const router = useRouter();
 const fotoPreview = ref(null);
 const dialogCropper = ref(false);
 const imageSrc = ref('');
 let cropperInstance = null;
+const loadingReenvioDivergente = ref(false);
+const arquivosCorrecao = ref({
+  laudo: null,
+  rg_beneficiario: null,
+  comprovante_residencia: null,
+  rg_responsavel: null,
+});
 
 const listaVinculos = [
     { title: 'Mãe', value: 'MAE' },
@@ -411,6 +629,132 @@ const listaVinculos = [
     { title: 'Próprio Beneficiário', value: 'PROPRIO' },
     { title: 'Outro', value: 'OUTRO' }
 ];
+const isRenovacaoEdicao = computed(() => store.modoEdicao && store.tipoFluxoEdicao === 'RENOVACAO');
+const temResponsavel = computed(() => Array.isArray(store.responsaveis) && store.responsaveis.length > 0);
+const checklistDocs = computed(() => {
+    const possuiDoc = (existente, novoArquivo) => Boolean((existente && existente.id) || novoArquivo);
+    return {
+        laudo: {
+            label: 'Laudo Médico',
+            ok: possuiDoc(store.statusLaudo, store.anexos.laudo),
+        },
+        rgBenef: {
+            label: 'RG/Certidão Beneficiário',
+            ok: possuiDoc(store.statusRgBenef, store.anexos.rg_beneficiario),
+        },
+        compRes: {
+            label: 'Comprovante Residência',
+            ok: possuiDoc(store.statusCompRes, store.anexos.comprovante_residencia),
+        },
+        rgResp: {
+            label: 'RG/CNH Responsável',
+            ok: possuiDoc(store.statusRgResp, store.anexos.rg_responsavel),
+        },
+    };
+});
+
+const dotPorStatus = (status) => {
+  if (status === 'analisando') return 'primary';
+  if (status === 'sucesso') return 'success';
+  if (status === 'revisao_manual') return 'info';
+  return 'grey';
+};
+
+const itensValidacaoIa = computed(() => {
+  const v = store.validacao || {};
+  const docsOrquestrados = store.triagemResposta?.log_ia?.etapas?.orquestracao?.documentos;
+  const filtro = Array.isArray(docsOrquestrados) ? new Set(docsOrquestrados) : null;
+  const pick = (key, titulo) => {
+    const row = v[key] || { status: 'pendente', mensagem: '' };
+    return {
+      key,
+      titulo,
+      status: row.status,
+      mensagem: row.mensagem,
+      dotColor: dotPorStatus(row.status),
+    };
+  };
+  const rows = [
+    { etapa: 'LAUDO', item: pick('laudo', 'Laudo Médico') },
+    { etapa: 'IDENTIDADE', item: pick('documentoPortador', 'RG/CNH do portador (TEA)') },
+    { etapa: 'RESPONSAVEL', item: pick('documentoResponsavel', 'RG/CNH do responsável') },
+    { etapa: 'ENDERECO', item: pick('comprovanteEndereco', 'Comprovante de endereço') },
+  ];
+  return filtro ? rows.filter((r) => filtro.has(r.etapa)).map((r) => r.item) : rows.map((r) => r.item);
+});
+const divergenciasIa = computed(() => store.triagemResposta?.resumo_divergencias || []);
+const podeReenviarDivergentes = computed(
+  () => store.iaResultadoGlobal === 'REVISAO_MANUAL' && Boolean(store.triagemResposta?.pode_correcao_cidadao)
+);
+const somenteCorrecaoAnexos = computed(() => Boolean(store.modoCorrecaoSomenteAnexos));
+
+const mapDocumentoParaAnexo = (docKey) => {
+  if (docKey === 'laudo') return 'laudo';
+  if (docKey === 'identidade') return 'rg_beneficiario';
+  if (docKey === 'endereco') return 'comprovante_residencia';
+  if (docKey === 'responsavel') return 'rg_responsavel';
+  return 'laudo';
+};
+const camposDivergentesAnexos = computed(() => {
+  const base = Array.isArray(store.docsDivergentesCorrecao) ? store.docsDivergentesCorrecao : [];
+  return new Set(base.map((k) => mapDocumentoParaAnexo(k)));
+});
+const campoDivergente = (anexoKey) => camposDivergentesAnexos.value.has(anexoKey);
+
+const reenviarDivergentes = async () => {
+  loadingReenvioDivergente.value = true;
+  try {
+    const payloadKeys = divergenciasIa.value.map((d) => mapDocumentoParaAnexo(d.documento));
+    const possuiArquivo = payloadKeys.some((k) => arquivosCorrecao.value[k]);
+    if (!possuiArquivo) {
+      toast.warning('Anexe ao menos um documento divergente para reenviar.');
+      return;
+    }
+    const protocolo = store.protocolo || store.perfilSalvo?.protocolo;
+    const cpf = store.beneficiario?.cpf || store.perfilSalvo?.cpf;
+    const dataNascimento = store.beneficiario?.data_nascimento || store.perfilSalvo?.data_nascimento;
+    await store.solicitarCorrecaoPrePac();
+    const ok = await store.carregarParaEdicao(protocolo, cpf, dataNascimento);
+    if (!ok) {
+      toast.error('Não foi possível abrir o formulário para correção.');
+      return;
+    }
+    Object.keys(arquivosCorrecao.value).forEach((k) => {
+      store.anexos[k] = arquivosCorrecao.value[k] || null;
+    });
+    await store.atualizarExistente();
+    toast.success('Reenvio realizado. A IA irá reprocessar os documentos atualizados.');
+  } catch (e) {
+    toast.error(e?.response?.data?.erro || 'Falha ao reenviar divergências.');
+  } finally {
+    loadingReenvioDivergente.value = false;
+  }
+};
+
+watch(
+  () => store.fasePosEnvio,
+  (fase) => {
+    if (fase === 'triagem_ia' && store.iaTriagemAutoRedirect) {
+      store.iaTriagemAutoRedirect = false;
+      router.push('/');
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => store.modoCorrecaoSomenteAnexos,
+  (ativo) => {
+    if (ativo) {
+      step.value = 3;
+    }
+  },
+  { immediate: true }
+);
+
+onUnmounted(() => {
+  // sem ações pendentes aqui
+});
 
 const iniciarCropper = () => {
     // Limpa instância anterior se existir
@@ -514,5 +858,85 @@ img {
 /* Opcional: Ajuste para o container do cropper ficar escuro */
 .cropper-modal {
     background-color: rgba(0, 0, 0, 0.8);
+}
+
+/* Transição suave entre formulário e painel de triagem (substitui utilitários Tailwind) */
+.triagem-surface {
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+.triagem-panel-enter {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (max-width: 600px) {
+  .triagem-panel-enter {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}
+
+.celebration-wrap {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+}
+.confetti {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.confetti-piece {
+  position: absolute;
+  top: -12px;
+  width: 6px;
+  height: 10px;
+  opacity: 0.85;
+  animation: confetti-fall 2.2s ease-in infinite;
+  animation-delay: var(--d, 0s);
+  left: calc(8% + (var(--n, 0) * 7%));
+}
+.confetti-piece:nth-child(odd) {
+  background: #43a047;
+}
+.confetti-piece:nth-child(even) {
+  background: #1e88e5;
+}
+.confetti-piece:nth-child(1) { left: 5%; }
+.confetti-piece:nth-child(2) { left: 15%; }
+.confetti-piece:nth-child(3) { left: 25%; }
+.confetti-piece:nth-child(4) { left: 35%; }
+.confetti-piece:nth-child(5) { left: 45%; }
+.confetti-piece:nth-child(6) { left: 55%; }
+.confetti-piece:nth-child(7) { left: 65%; }
+.confetti-piece:nth-child(8) { left: 75%; }
+.confetti-piece:nth-child(9) { left: 85%; }
+.confetti-piece:nth-child(10) { left: 92%; }
+.confetti-piece:nth-child(11) { left: 50%; }
+.confetti-piece:nth-child(12) { left: 30%; }
+
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(140px) rotate(260deg);
+    opacity: 0;
+  }
+}
+.celebration-wrap :deep(.v-banner) {
+  position: relative;
+  z-index: 1;
+}
+
+.doc-divergente :deep(.v-field) {
+  border: 2px solid rgb(var(--v-theme-warning));
+  background-color: rgba(var(--v-theme-warning), 0.08);
+}
+
+.doc-divergente :deep(.v-label),
+.doc-divergente :deep(.v-field__prepend-inner .v-icon) {
+  color: rgb(var(--v-theme-warning)) !important;
 }
 </style>

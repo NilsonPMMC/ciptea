@@ -1,0 +1,14 @@
+---
+description: Fluxo base de alteracoes no projeto
+alwaysApply: true
+---
+
+# Fluxo base CIPTEA
+
+- Priorize mudancas pequenas, objetivas e com impacto claro.
+- Antes de criar novos modulos, reutilize `stores`, `services` e componentes existentes.
+- Nao altere arquitetura sem necessidade: `views` (telas), `components` (reuso), `stores` (estado), `services` (HTTP).
+- Evite dependencias novas sem justificativa tecnica.
+- Nao faca commit/push sem pedido explicito do usuario.
+- Nao reverta alteracoes do usuario sem autorizacao.
+- Em mudancas comportamentais, explique rapidamente o "por que" tecnico no retorno final.

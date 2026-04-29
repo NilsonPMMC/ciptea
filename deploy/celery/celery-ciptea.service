@@ -1,0 +1,17 @@
+[Unit]
+Description=Celery Worker Service for CIPTEA
+After=network.target redis-server.service
+
+[Service]
+Type=simple
+User=gabinete
+Group=www-data
+WorkingDirectory=/var/www/ciptea
+EnvironmentFile=/var/www/ciptea/.env
+Environment=DJANGO_SETTINGS_MODULE=core.settings
+ExecStart=/var/www/ciptea/venv/bin/celery -A core worker -l info -c 4
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

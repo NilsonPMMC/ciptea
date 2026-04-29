@@ -1,0 +1,8 @@
+import os
+
+env = os.getenv('DJANGO_ENV', 'dev').strip().lower()
+
+if env == 'prod':
+    from .prod import *  # noqa: F401,F403
+else:
+    from .dev import *  # noqa: F401,F403

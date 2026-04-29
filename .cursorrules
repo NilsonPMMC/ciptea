@@ -1,0 +1,36 @@
+Projeto CIPTEA - Regras para o Agente
+
+Escopo e stack
+- Aplicar estas regras em todo o repositório.
+- Priorizar mudanças no `frontend/` (Vue 3 + Vite + Vuetify + Pinia + Axios).
+- Preservar a arquitetura atual: `views` para telas, `components` reutilizáveis, `stores` para estado, `services` para acesso HTTP.
+
+Padrões de implementação
+- Fazer mudanças pequenas, objetivas e com impacto claro.
+- Não introduzir novas dependências sem necessidade real.
+- Reutilizar stores e serviços existentes antes de criar novos módulos.
+- Evitar duplicação de lógica: extrair utilitários quando houver repetição.
+- Manter nomes semânticos e consistentes com o padrão já usado no projeto.
+
+Segurança e dados
+- Nunca hardcodar URLs de API/endpoints; usar variáveis de ambiente (`VITE_*`).
+- Não persistir dados pessoais sensíveis em `localStorage` sem justificativa explícita.
+- Evitar `v-html`; quando inevitável, sanitizar conteúdo antes de renderizar.
+- Não expor tokens, segredos ou dados pessoais em logs.
+
+Qualidade e validação
+- Após alterações relevantes, executar pelo menos:
+  - `npm run build` (em `frontend/`)
+- Quando houver testes no contexto da tarefa, executá-los e reportar resultado.
+- Corrigir erros de lint introduzidos pelas mudanças antes de finalizar.
+
+UI/UX (Vuetify)
+- Manter consistência visual com componentes Vuetify já utilizados.
+- Preservar acessibilidade básica (labels, estados de erro, foco e feedback ao usuário).
+- Evitar mudanças de layout amplas sem solicitação explícita.
+
+Git e colaboração
+- Não criar commit/push sem pedido explícito do usuário.
+- Não reverter alterações do usuário sem autorização.
+- Em mudanças de comportamento, explicar rapidamente o motivo técnico no retorno final.
+- Sempre que necessário, atualizar o `.cursorrules` para registrar decisões/regras recorrentes do projeto.

@@ -1,0 +1,39 @@
+[
+  {
+    "path": "/var/www/ciptea/laudo_teste.jpg",
+    "tipo": "laudo",
+    "expected_ok": true
+  },
+  {
+    "path": "/var/www/ciptea/rg_nilson.jpg",
+    "tipo": "identidade",
+    "nome": "Nilson Carvalho de Moraes",
+    "cpf": "29832481864",
+    "data_nascimento": "1981-08-13",
+    "expected_ok": true
+  },
+  {
+    "path": "/var/www/ciptea/rg_theo.jpeg",
+    "tipo": "identidade",
+    "nome": "Theo de Souza Moraes",
+    "cpf": "56835247843",
+    "data_nascimento": "2015-04-27",
+    "expected_ok": true
+  },
+  {
+    "path": "/var/www/ciptea/cnh_nilson.pdf",
+    "tipo": "identidade",
+    "nome": "Nilson Carvalho de Moraes",
+    "cpf": "29832481864",
+    "data_nascimento": "1981-08-13",
+    "expected_ok": true
+  },
+  {
+    "path": "/var/www/ciptea/comprovante_endereco.pdf",
+    "tipo": "endereco",
+    "responsaveis": [
+      "Nilson Carvalho de Moraes"
+    ],
+    "expected_ok": false
+  }
+]

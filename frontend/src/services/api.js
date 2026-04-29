@@ -1,13 +1,19 @@
 import axios from 'axios';
 
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || `${window.location.origin}/api/`;
+
 const api = axios.create({
-    baseURL: 'http://192.168.10.50:8010/api/',
+    baseURL: apiBaseUrl,
     headers: { 'Content-Type': 'application/json' }
 });
 
+const getToken = () => {
+    return sessionStorage.getItem('access_token') || localStorage.getItem('access_token');
+};
+
 // Interceptor para injetar o Token
 api.interceptors.request.use(config => {
-    const token = localStorage.getItem('access_token');
+    const token = getToken();
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
@@ -20,10 +26,13 @@ api.interceptors.response.use(
   error => {
     if (error.response && error.response.status === 401) {
         
-        const token = localStorage.getItem('access_token');
+        const token = getToken();
         
         if (token) {
+            sessionStorage.removeItem('access_token');
+            sessionStorage.removeItem('refresh_token');
             localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
             window.location.href = '/login';
         }
     }

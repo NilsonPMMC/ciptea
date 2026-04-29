@@ -122,7 +122,15 @@ class Solicitacao(models.Model):
         ('SISTEMA_NOVO', 'Sistema Novo (Digital)'),
         ('LEGADO', 'Sistema Antigo (Importado)'),
     ]
+    TIPO_FLUXO_CHOICES = [
+        ('PRIMEIRA_VIA', 'Primeira via'),
+        ('RENOVACAO', 'Renovação'),
+    ]
     origem = models.CharField(max_length=20, choices=ORIGEM_CHOICES, default='SISTEMA_NOVO')
+    tipo_fluxo = models.CharField(max_length=20, choices=TIPO_FLUXO_CHOICES, default='PRIMEIRA_VIA')
+    renovacao_de = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='renovacoes')
+    primeira_digitalizacao = models.BooleanField(default=False)
+    validade_anos = models.PositiveSmallIntegerField(default=5)
 
     def save(self, *args, **kwargs):
         if not self.protocolo:
@@ -157,7 +165,29 @@ class Documento(models.Model):
 
     def __str__(self):
         return f"{self.get_tipo_display()} - {self.solicitacao.protocolo}"
-    
+
+
+class ValidacaoDocumentoIA(models.Model):
+    STATUS_VALIDACAO_CHOICES = [
+        ('PENDENTE', 'Pendente'),
+        ('PROCESSANDO', 'Processando'),
+        ('APROVADO_IA', 'Aprovado pela IA'),
+        ('REVISAO_MANUAL', 'Revisão Manual'),
+    ]
+
+    solicitacao = models.OneToOneField(Solicitacao, on_delete=models.CASCADE, related_name='validacao_ia')
+    arquivo_laudo_medico = models.FileField(upload_to=get_file_path, blank=True, null=True)
+    arquivo_doc_tea = models.FileField(upload_to=get_file_path, blank=True, null=True)
+    arquivo_doc_responsavel = models.FileField(upload_to=get_file_path, blank=True, null=True)
+    arquivo_comprovante_endereco = models.FileField(upload_to=get_file_path, blank=True, null=True)
+    status_validacao = models.CharField(max_length=20, choices=STATUS_VALIDACAO_CHOICES, default='PENDENTE')
+    log_ia = models.JSONField(default=dict, blank=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Validação IA {self.solicitacao.protocolo} - {self.status_validacao}"
+
+
 class Historico(models.Model):
     solicitacao = models.ForeignKey(Solicitacao, on_delete=models.CASCADE, related_name='historico')
     data = models.DateTimeField(auto_now_add=True)

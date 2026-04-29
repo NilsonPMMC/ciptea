@@ -29,6 +29,15 @@
                 <v-sheet class="rounded-pill px-8 py-3 mb-6 elevation-2" color="white" width="100%">
                     <h3 class="text-h6 font-weight-bold text-primary text-truncate">Olá, {{ getPrimeiroNome(store.perfilSalvo.nome) }}</h3>
                 </v-sheet>
+                <v-chip
+                    v-if="isRenovacaoEmAndamento"
+                    color="deep-orange-darken-1"
+                    variant="flat"
+                    class="mb-4"
+                    prepend-icon="mdi-refresh-circle"
+                >
+                    Renovação em andamento
+                </v-chip>
 
                 <div v-if="store.perfilSalvo.tipo === 'LEGADO'" class="w-100">
                     <v-alert type="info" variant="tonal" class="mb-4 text-left" border="start" density="compact">
@@ -42,8 +51,95 @@
                 </div>
 
                 <div v-else class="w-100">
+                    <v-alert
+                        v-if="pipelineEmAndamento"
+                        type="info"
+                        variant="tonal"
+                        class="mb-4 text-left"
+                        border="start"
+                    >
+                        <strong>IA em análise</strong><br>
+                        Seus documentos estão em conferência automática no backend.
+                    </v-alert>
+                    <v-btn
+                        v-if="pipelineEmAndamento"
+                        block
+                        color="#00C0F3"
+                        height="56"
+                        rounded="xl"
+                        class="text-white mb-4 elevation-4 text-h6"
+                        prepend-icon="mdi-pulse"
+                        @click="acompanharAnaliseIa"
+                    >
+                        ACOMPANHAR ANÁLISE
+                    </v-btn>
+                    <v-alert
+                        v-if="pipelineConcluido && iaStatusEfetivo === 'APROVADO_IA'"
+                        type="success"
+                        variant="tonal"
+                        class="mb-4 text-left"
+                        border="start"
+                    >
+                        <strong>Triagem automática concluída</strong><br>
+                        Resultado inicial aprovado pela IA.
+                    </v-alert>
+                    <v-alert
+                        v-if="mostrarDivergenciasIa"
+                        type="warning"
+                        variant="tonal"
+                        class="mb-4 text-left"
+                        border="start"
+                    >
+                        <div class="text-subtitle-2 font-weight-bold mb-2">
+                            Divergências detectadas na triagem IA
+                        </div>
+                        <div
+                            v-for="d in iaResumoDivergencias"
+                            :key="`${d.documento}-${d.codigo}`"
+                            class="mb-3"
+                        >
+                            <div class="font-weight-bold">{{ d.titulo }}</div>
+                            <div class="text-caption mb-1">{{ d.codigo }}</div>
+                            <div class="text-body-2">{{ d.motivo }}</div>
+                        </div>
+                        <v-btn
+                            v-if="podeCorrecaoPrePac"
+                            block
+                            color="warning"
+                            height="52"
+                            rounded="xl"
+                            class="text-white mt-2 elevation-2"
+                            prepend-icon="mdi-file-document-edit-outline"
+                            :loading="loadingCorrecaoPrePac"
+                            @click="corrigirAntesPac"
+                        >
+                            CORRIGIR AGORA
+                        </v-btn>
+                    </v-alert>
+                    <v-alert
+                        v-if="isCarteirinhaVencida"
+                        type="warning"
+                        variant="tonal"
+                        class="mb-4 text-left"
+                        border="start"
+                        density="compact"
+                    >
+                        <strong>Carteirinha vencida</strong><br>
+                        Inicie a renovação para atualizar seus dados e documentos.
+                    </v-alert>
                     <v-btn 
-                        v-if="estadoAtual === 'APROVADO'"
+                        v-if="estadoAtual === 'APROVADO' && isCarteirinhaVencida"
+                        block color="deep-orange-darken-1" height="60" rounded="xl" 
+                        class="text-white mb-4 elevation-4 text-h6"
+                        prepend-icon="mdi-refresh-circle"
+                        @click="iniciarRenovacaoRapida"
+                        :loading="loadingRenovacao"
+                    >
+                        RENOVAR CARTEIRINHA
+                    </v-btn>
+
+                    <v-btn 
+                        v-else-if="estadoAtual === 'APROVADO'"
                         block color="#1A237E" height="60" rounded="xl" 
                         class="text-white mb-4 elevation-4 text-h6"
                         prepend-icon="mdi-card-account-details-outline"
@@ -51,6 +147,17 @@
                         :loading="store.consulta.loading"
                     >
                         CARTEIRINHA
+                    </v-btn>
+
+                    <v-btn 
+                        v-else-if="estadoAtual === 'RENOVACAO_ABERTA'"
+                        block color="deep-orange-darken-1" height="60" rounded="xl" 
+                        class="text-white mb-4 elevation-4 text-h6"
+                        prepend-icon="mdi-file-document-edit-outline"
+                        @click="continuarRenovacaoRapida"
+                        :loading="store.loading"
+                    >
+                        CONTINUAR RENOVAÇÃO
                     </v-btn>
 
                     <v-btn 
@@ -79,15 +186,18 @@
                         v-else
                         block color="#00C0F3" height="60" rounded="xl" 
                         class="text-white mb-4 elevation-4 text-h6"
-                        prepend-icon="mdi-clock-outline"
+                        :prepend-icon="pipelineEmAndamento ? 'mdi-robot-happy-outline' : 'mdi-clock-outline'"
                         @click="verStatusCompleto"
                     >
-                        EM ANÁLISE
+                        {{ pipelineEmAndamento ? 'PROCESSANDO IA' : 'EM ANÁLISE' }}
                     </v-btn>
 
                     <div class="text-center mb-2">
                         <a @click="verStatusCompleto" class="text-primary-darken-1 text-decoration-none font-weight-bold cursor-pointer">
-                            <span v-if="estadoAtual === 'CORRIGIR'" class="text-warning">
+                            <span v-if="estadoAtual === 'RENOVACAO_ABERTA'" class="text-deep-orange-darken-1">
+                                <v-icon icon="mdi-refresh-circle" size="small"></v-icon> Continue a renovação
+                            </span>
+                            <span v-else-if="estadoAtual === 'CORRIGIR'" class="text-warning">
                                 <v-icon icon="mdi-alert-circle" size="small"></v-icon> Ação necessária
                             </span>
                             <span v-else-if="estadoAtual === 'INDEFERIDO'" class="text-error">
@@ -177,6 +287,11 @@
                         <div class="text-caption text-grey-darken-1">Beneficiário</div>
                         <div class="text-h6 font-weight-bold text-primary mb-1">{{ store.consulta.resultado.nome }}</div>
                         <v-chip :color="getStatusColor(store.consulta.resultado.status)" size="small">{{ store.consulta.resultado.status }}</v-chip>
+                        <div v-if="store.consulta.resultado.tipo_fluxo === 'RENOVACAO'" class="mt-2">
+                            <v-chip color="deep-orange-darken-1" size="small" prepend-icon="mdi-refresh-circle">
+                                Renovação em andamento
+                            </v-chip>
+                        </div>
                     </div>
 
                     <div v-if="store.consulta.resultado.historico && store.consulta.resultado.historico.length" class="mt-4 pt-2 border-t">
@@ -224,7 +339,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '@/services/api';
 import { useCadastroStore } from '@/stores/cadastro';
@@ -246,6 +361,10 @@ const dialogConsulta = ref(false);
 const showCarteira = ref(false);
 const dadosCarteira = ref({});
 const deferredPrompt = ref(null);
+const loadingRenovacao = ref(false);
+const loadingCorrecaoPrePac = ref(false);
+const triagemDetalhe = ref(null);
+let autoRefreshTriagemId = null;
 
 // --- 1. FUNÇÃO CENTRAL: VERIFICAR ACESSO (Login) ---
 const verificarAcesso = async () => {
@@ -280,7 +399,10 @@ const verificarAcesso = async () => {
             foto: data.foto,
             cpf: formAcesso.value.cpf,
             data_nascimento: formAcesso.value.data_nascimento,
-            tipo: data.tipo // 'SISTEMA_NOVO' ou 'LEGADO'
+            tipo: data.tipo, // 'SISTEMA_NOVO' ou 'LEGADO'
+            vencida: Boolean(data.vencida),
+            tipo_fluxo: data.tipo_fluxo || 'PRIMEIRA_VIA',
+            solicitacao_id: data.solicitacao_id || null,
         };
         
         store.salvarNoDispositivo(dadosParaSalvar);
@@ -292,7 +414,6 @@ const verificarAcesso = async () => {
         else toast.success(`Bem-vindo de volta!`);
 
     } catch (e) {
-        console.error(e);
         toast.error("Erro ao verificar acesso. Verifique os dados.");
     } finally {
         loadingAcesso.value = false;
@@ -308,11 +429,112 @@ const estadoAtual = computed(() => {
     if (!perfil) return null;
     const statusRaw = (perfil.status_code || perfil.status || '').toUpperCase();
 
+    if (perfil.tipo_fluxo === 'RENOVACAO' && statusRaw === 'ABERTO') return 'RENOVACAO_ABERTA';
     if (['APROVADO', 'IMPRESSO'].includes(statusRaw)) return 'APROVADO';
     if (['PENDENTE', 'REJEITADO', 'CORREÇÃO'].some(s => statusRaw.includes(s))) return 'CORRIGIR';
     if (statusRaw.includes('INDEFERIDO')) return 'INDEFERIDO';
     return 'AGUARDANDO';
 });
+const statusSolicitacaoAberto = computed(() => {
+    const statusRaw = (store.perfilSalvo?.status_code || store.perfilSalvo?.status || '').toUpperCase();
+    return statusRaw === 'ABERTO';
+});
+const isCarteirinhaVencida = computed(() => Boolean(store.perfilSalvo?.vencida));
+const isRenovacaoEmAndamento = computed(() => store.perfilSalvo?.tipo_fluxo === 'RENOVACAO');
+const pipelineEmAndamento = computed(
+    () => Boolean(store.solicitacaoIdTriagem) && !(store.iaResultadoGlobal || store.perfilSalvo?.ia_status)
+);
+const pipelineConcluido = computed(
+    () => Boolean(store.solicitacaoIdTriagem) && Boolean(store.iaResultadoGlobal || store.perfilSalvo?.ia_status)
+);
+const iaStatusEfetivo = computed(() => store.iaResultadoGlobal || store.perfilSalvo?.ia_status || null);
+const iaResumoDivergencias = computed(() => triagemDetalhe.value?.resumo_divergencias || []);
+const mostrarDivergenciasIa = computed(
+    () => statusSolicitacaoAberto.value && iaResumoDivergencias.value.length > 0
+);
+const podeCorrecaoPrePac = computed(
+    () =>
+        statusSolicitacaoAberto.value &&
+        iaResumoDivergencias.value.length > 0
+);
+
+const carregarTriagemDetalhe = async () => {
+    const perfil = store.perfilSalvo;
+    if (!perfil?.protocolo || !perfil?.cpf || !perfil?.data_nascimento) return;
+    if (!store.solicitacaoIdTriagem) {
+        try {
+            const { data } = await api.get(
+                `solicitacoes/buscar-completo/?protocolo=${perfil.protocolo}&cpf=${perfil.cpf}&data_nascimento=${perfil.data_nascimento}`
+            );
+            if (data?.id) store.solicitacaoIdTriagem = data.id;
+        } catch (e) {
+            return;
+        }
+    }
+    if (!store.solicitacaoIdTriagem) return;
+    try {
+        const { data } = await api.get(
+            `solicitacoes/${store.solicitacaoIdTriagem}/triagem-ia/?protocolo=${perfil.protocolo}&cpf=${perfil.cpf}&data_nascimento=${perfil.data_nascimento}`
+        );
+        triagemDetalhe.value = data;
+        store.triagemResposta = data;
+        if (data?.status_validacao === 'APROVADO_IA' || data?.status_validacao === 'REVISAO_MANUAL') {
+            store.iaResultadoGlobal = data.status_validacao;
+            store.salvarNoDispositivo({
+                ...(store.perfilSalvo || perfil),
+                solicitacao_id: store.solicitacaoIdTriagem,
+                ia_status: data.status_validacao,
+            });
+        } else {
+            // Garante novo ciclo de acompanhamento sem exigir refresh manual.
+            store.iaResultadoGlobal = null;
+            if (store.perfilSalvo?.ia_status) {
+                store.salvarNoDispositivo({
+                    ...(store.perfilSalvo || perfil),
+                    solicitacao_id: store.solicitacaoIdTriagem,
+                    ia_status: null,
+                });
+            }
+        }
+    } catch (e) {
+        // silencioso: painel segue com fallback básico
+    }
+};
+
+const corrigirAntesPac = async () => {
+    loadingCorrecaoPrePac.value = true;
+    try {
+        const ok = await store.solicitarCorrecaoPrePac();
+        if (!ok) {
+            toast.warning("Não foi possível abrir a correção neste momento.");
+            return;
+        }
+        store.prepararCorrecaoSomenteAnexos(iaResumoDivergencias.value);
+        toast.success("Correção liberada. Atualize os arquivos e reenvie.");
+        router.push('/cidadao');
+    } catch (e) {
+        toast.error(e?.response?.data?.erro || "Correção prévia indisponível.");
+    } finally {
+        loadingCorrecaoPrePac.value = false;
+    }
+};
+
+const acompanharAnaliseIa = () => {
+    if (!store.solicitacaoIdTriagem) return;
+    store.abrirAcompanhamentoTriagem();
+    router.push('/cidadao');
+};
+
+const garantirAtualizacaoAutomaticaTriagem = () => {
+    if (autoRefreshTriagemId) return;
+    autoRefreshTriagemId = setInterval(async () => {
+        if (!store.perfilSalvo?.cpf) return;
+        await carregarTriagemDetalhe();
+        if (pipelineEmAndamento.value && store.triagemPollTimerId == null) {
+            store.iniciarTriagemIaPolling();
+        }
+    }, 5000);
+};
 
 // --- 3. AÇÕES DO PAINEL ---
 
@@ -339,17 +561,91 @@ const resolverPendenciasRapido = async () => {
     else toast.error("Erro ao carregar edição.");
 };
 
+const continuarRenovacaoRapida = async () => {
+    const perfil = store.perfilSalvo;
+    if (!perfil?.protocolo || !perfil?.cpf || !perfil?.data_nascimento) {
+        toast.warning("Não foi possível continuar a renovação.");
+        return;
+    }
+    const sucesso = await store.carregarParaEdicao(perfil.protocolo, perfil.cpf, perfil.data_nascimento);
+    if (sucesso) router.push('/cidadao');
+    else toast.error("Erro ao carregar a renovação.");
+};
+
 const atualizarCadastroLegado = async () => {
     const perfil = store.perfilSalvo;
-    // O endpoint 'buscar-completo' deve saber lidar com legado ou retornar o básico
-    const sucesso = await store.carregarParaEdicao(perfil.protocolo, perfil.cpf, perfil.data_nascimento);
-    if(sucesso) router.push('/cidadao'); 
-    else {
-        // Fallback: se não carregar nada, reseta e vai pro form limpo mas com CPF
-        store.resetForm();
-        store.beneficiario.cpf = perfil.cpf;
-        store.beneficiario.data_nascimento = perfil.data_nascimento;
+    if (!perfil?.protocolo || !perfil?.cpf || !perfil?.data_nascimento) {
+        toast.warning("Não foi possível identificar os dados para atualizar o cadastro.");
+        return;
+    }
+    loadingRenovacao.value = true;
+    try {
+        const { data } = await api.post('solicitacoes/iniciar-renovacao/', {
+            protocolo: perfil.protocolo,
+            cpf: perfil.cpf,
+            data_nascimento: perfil.data_nascimento,
+        });
+        const protocoloRenovacao = data?.protocolo;
+        if (!protocoloRenovacao) throw new Error('Protocolo de renovação não retornado');
+        const sucesso = await store.carregarParaEdicao(protocoloRenovacao, perfil.cpf, perfil.data_nascimento);
+        if (!sucesso) {
+            toast.error("Renovação iniciada, mas não foi possível abrir o formulário.");
+            return;
+        }
+        store.salvarNoDispositivo({
+            ...perfil,
+            protocolo: protocoloRenovacao,
+            status: data.status || 'ABERTO',
+            status_code: data.status || 'ABERTO',
+            tipo: 'SISTEMA_NOVO',
+            vencida: false,
+            tipo_fluxo: 'RENOVACAO',
+        });
+        toast.success("Cadastro legado convertido para renovação digital.");
         router.push('/cidadao');
+    } catch (e) {
+        const mensagem = e?.response?.data?.erro || "Não foi possível iniciar a atualização do cadastro legado.";
+        toast.error(mensagem);
+    } finally {
+        loadingRenovacao.value = false;
+    }
+};
+
+const iniciarRenovacaoRapida = async () => {
+    const perfil = store.perfilSalvo;
+    if (!perfil?.protocolo || !perfil?.cpf || !perfil?.data_nascimento) {
+        toast.warning("Não foi possível identificar os dados para renovação.");
+        return;
+    }
+    loadingRenovacao.value = true;
+    try {
+        const { data } = await api.post('solicitacoes/iniciar-renovacao/', {
+            protocolo: perfil.protocolo,
+            cpf: perfil.cpf,
+            data_nascimento: perfil.data_nascimento
+        });
+        const protocoloRenovacao = data?.protocolo;
+        if (!protocoloRenovacao) throw new Error('Protocolo de renovação não retornado');
+        const sucesso = await store.carregarParaEdicao(protocoloRenovacao, perfil.cpf, perfil.data_nascimento);
+        if (!sucesso) {
+            toast.error("Renovação iniciada, mas não foi possível abrir o formulário.");
+            return;
+        }
+        store.salvarNoDispositivo({
+            ...perfil,
+            protocolo: protocoloRenovacao,
+            status: data.status || 'ABERTO',
+            status_code: data.status || 'ABERTO',
+            vencida: false,
+            tipo_fluxo: 'RENOVACAO'
+        });
+        toast.success("Renovação iniciada. Complete os dados para envio.");
+        router.push('/cidadao');
+    } catch (e) {
+        const mensagem = e?.response?.data?.erro || "Não foi possível iniciar a renovação.";
+        toast.error(mensagem);
+    } finally {
+        loadingRenovacao.value = false;
     }
 };
 
@@ -392,6 +688,10 @@ const formatarDataHora = (dataISO) => {
 // Lifecycle: Atualização Silenciosa
 onMounted(async () => {
     store.carregarDoDispositivo();
+    await carregarTriagemDetalhe();
+    if (pipelineEmAndamento.value && store.triagemPollTimerId == null) {
+        store.iniciarTriagemIaPolling();
+    }
     if (store.perfilSalvo && store.perfilSalvo.cpf) {
         try {
             // Tenta atualizar status/foto no fundo
@@ -404,8 +704,23 @@ onMounted(async () => {
                 const atualizado = { ...store.perfilSalvo, ...data };
                 store.salvarNoDispositivo(atualizado);
                 store.perfilSalvo = atualizado;
+                if (data?.solicitacao_id) {
+                    store.solicitacaoIdTriagem = data.solicitacao_id;
+                }
             }
-        } catch (e) { console.error("Sync error", e); }
+        } catch (e) { /* sincronização silenciosa */ }
+    }
+    await carregarTriagemDetalhe();
+    if (pipelineEmAndamento.value && store.triagemPollTimerId == null) {
+        store.iniciarTriagemIaPolling();
+    }
+    garantirAtualizacaoAutomaticaTriagem();
+});
+
+onUnmounted(() => {
+    if (autoRefreshTriagemId) {
+        clearInterval(autoRefreshTriagemId);
+        autoRefreshTriagemId = null;
     }
 });
 

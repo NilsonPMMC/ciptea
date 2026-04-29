@@ -1,0 +1,65 @@
+# Dependências
+node_modules/
+venv/
+.venv/
+env/
+target/
+
+# Python Cache & Build
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Vue/Vite/Frontend
+.vite/
+.nuxt/
+.output/
+.vercel/
+*.local
+
+# Database & Logs
+*.sqlite3
+*.db
+*.log
+logs/
+*.sql
+*.gz
+
+# Assets Pesados
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+*.mp4
+*.woff
+*.woff2
+*.ttf
+*.eot
+
+# IDE & OS
+.git/
+.github/
+.vscode/
+.idea/
+.DS_Store

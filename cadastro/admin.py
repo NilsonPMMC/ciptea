@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Beneficiario, Responsavel, Solicitacao, Documento, Historico
+from .models import Beneficiario, Responsavel, Solicitacao, Documento, Historico, ValidacaoDocumentoIA
 
 # 1. Inline de Documentos (Agora com Status e Motivo)
 class DocumentoInline(admin.TabularInline):
@@ -46,3 +46,90 @@ class SolicitacaoAdmin(admin.ModelAdmin):
 admin.site.register(Historico)
 admin.site.register(Documento) # Já está inline na Solicitação
 admin.site.register(Responsavel) # Já está inline no Beneficiário
+
+
+@admin.register(ValidacaoDocumentoIA)
+class ValidacaoDocumentoIAAdmin(admin.ModelAdmin):
+    list_display = (
+        'solicitacao',
+        'status_validacao',
+        'status_laudo',
+        'status_identidade',
+        'status_endereco',
+        'status_responsavel',
+        'atualizado_em',
+    )
+    list_filter = ('status_validacao', 'atualizado_em')
+    search_fields = ('solicitacao__protocolo', 'solicitacao__beneficiario__nome_completo')
+    readonly_fields = (
+        'atualizado_em',
+        'status_documentos_resumo',
+        'status_laudo',
+        'status_identidade',
+        'status_endereco',
+        'status_responsavel',
+        'log_ia',
+    )
+
+    fields = (
+        'solicitacao',
+        'status_validacao',
+        'status_documentos_resumo',
+        'status_laudo',
+        'status_identidade',
+        'status_endereco',
+        'status_responsavel',
+        'arquivo_laudo_medico',
+        'arquivo_doc_tea',
+        'arquivo_doc_responsavel',
+        'arquivo_comprovante_endereco',
+        'atualizado_em',
+        'log_ia',
+    )
+
+    def _status_doc(self, obj, key):
+        log = obj.log_ia if isinstance(obj.log_ia, dict) else {}
+        sd = log.get('status_documentos') if isinstance(log.get('status_documentos'), dict) else None
+        if not sd:
+            # fallback quando status_documentos é exposto no serializer mas ainda não persistido no log
+            etapas = log.get('etapas') if isinstance(log.get('etapas'), dict) else {}
+            valid = etapas.get('validacao') if isinstance(etapas.get('validacao'), dict) else {}
+            row = valid.get(key) if isinstance(valid.get(key), dict) else {}
+            if not row:
+                return 'PENDENTE'
+            return 'VALIDADO' if row.get('ok') else 'INVALIDO'
+        row = sd.get(key) if isinstance(sd.get(key), dict) else {}
+        return row.get('status') or 'PENDENTE'
+
+    def status_laudo(self, obj):
+        return self._status_doc(obj, 'laudo')
+    status_laudo.short_description = 'Laudo IA'
+
+    def status_identidade(self, obj):
+        return self._status_doc(obj, 'identidade')
+    status_identidade.short_description = 'Identidade IA'
+
+    def status_endereco(self, obj):
+        return self._status_doc(obj, 'endereco')
+    status_endereco.short_description = 'Endereço IA'
+
+    def status_responsavel(self, obj):
+        log = obj.log_ia if isinstance(obj.log_ia, dict) else {}
+        etapas = log.get('etapas') if isinstance(log.get('etapas'), dict) else {}
+        valid = etapas.get('validacao') if isinstance(etapas.get('validacao'), dict) else {}
+        row = valid.get('responsavel') if isinstance(valid.get('responsavel'), dict) else {}
+        if row:
+            return 'VALIDADO' if row.get('ok') else 'INVALIDO'
+        if obj.arquivo_doc_responsavel:
+            return 'PENDENTE'
+        return 'NAO_APLICAVEL'
+    status_responsavel.short_description = 'Responsável IA'
+
+    def status_documentos_resumo(self, obj):
+        return (
+            f"Laudo: {self.status_laudo(obj)} | "
+            f"Identidade: {self.status_identidade(obj)} | "
+            f"Endereço: {self.status_endereco(obj)} | "
+            f"Responsável: {self.status_responsavel(obj)}"
+        )
+    status_documentos_resumo.short_description = 'Resumo por documento'

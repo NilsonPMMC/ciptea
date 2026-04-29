@@ -1,0 +1,20 @@
+---
+description: Validacoes minimas de qualidade antes de concluir
+globs: frontend/**/*
+alwaysApply: false
+---
+
+# Qualidade minima
+
+- Depois de alteracoes relevantes no frontend, rode `npm run build` em `frontend/`.
+- Se a tarefa incluir testes, execute-os e reporte o resultado.
+- Corrija erros de lint introduzidos pela propria mudanca antes de finalizar.
+- Evite codigo morto e arquivos de template nao utilizados.
+- Mantenha diffs pequenos e fáceis de revisar.
+
+## Checklist rapido
+
+- Build ok
+- Sem hardcode sensivel
+- Sem logs sensiveis
+- Sem regressao visivel no fluxo alterado

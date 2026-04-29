@@ -2,14 +2,225 @@ import { defineStore } from 'pinia';
 import api from '@/services/api';
 import axios from 'axios';
 
+const onlyDigits = (value) => (value || '').toString().replace(/\D/g, '');
+const sanitizeText = (value) => (value || '').toString().replace(/\u0000/g, '').trim();
+
+/** Última mensagem de pendência/correção gravada no histórico (parecer do PAC). */
+function mensagemParecerDoHistorico(historico) {
+  if (!Array.isArray(historico) || !historico.length) return '';
+  const sorted = [...historico].sort((a, b) => {
+    const ta = new Date(a.data).getTime();
+    const tb = new Date(b.data).getTime();
+    return tb - ta;
+  });
+  const row = sorted.find(
+    (h) =>
+      h.tipo_evento === 'PENDENCIA' &&
+      h.mensagem &&
+      String(h.mensagem).trim() &&
+      String(h.mensagem).trim() !== 'Atualização de status administrativa.'
+  );
+  return row ? String(row.mensagem).trim() : '';
+}
+
+function enriquecerDocComParecerHistorico(doc, parecer) {
+  if (!doc || !parecer) return doc;
+  const motivo = (doc.motivo_rejeicao && String(doc.motivo_rejeicao).trim()) || '';
+  if (doc.status === 'REJEITADO' && !motivo) {
+    return { ...doc, motivo_rejeicao: parecer.slice(0, 255) };
+  }
+  return doc;
+}
+
+/** Query com protocolo + CPF + nascimento para rotas públicas de correção (sem JWT). */
+function queryCorrecaoCidadao(protocolo, cpf, dataNascimento) {
+  const p = (protocolo || '').toString().trim();
+  const c = onlyDigits(cpf);
+  const dn = dataNascimento ? String(dataNascimento).slice(0, 10) : '';
+  if (!p || !c || !dn) return null;
+  return new URLSearchParams({
+    protocolo: p,
+    cpf: c,
+    data_nascimento: dn,
+  }).toString();
+}
+
+/** @typedef {'pendente'|'analisando'|'sucesso'|'revisao_manual'} StatusDocIa */
+
+function createValidacaoInicial() {
+  return {
+    laudo: { status: 'pendente', mensagem: 'Aguardando análise.' },
+    documentoPortador: { status: 'pendente', mensagem: 'Aguardando análise.' },
+    documentoResponsavel: { status: 'pendente', mensagem: 'Aguardando análise.' },
+    comprovanteEndereco: { status: 'pendente', mensagem: 'Aguardando análise.' },
+  };
+}
+
+/**
+ * Deriva o estado por documento a partir da resposta de triagem-ia (um registro agregado + log_ia).
+ * @param {object} data
+ * @param {boolean} temResponsavel
+ */
+function mapTriagemParaValidacao(data, temResponsavel) {
+  const st = data?.status_validacao;
+  const sd = data?.status_documentos && typeof data.status_documentos === 'object'
+    ? data.status_documentos
+    : null;
+  const log = data?.log_ia && typeof data.log_ia === 'object' ? data.log_ia : {};
+  const etapas = log.etapas || {};
+  /** @type {Record<string, { status: StatusDocIa, mensagem: string }>} */
+  const out = createValidacaoInicial();
+
+  const msgAnalisando = {
+    laudo: 'Buscando CID e dados do laudo…',
+    documentoPortador: 'Validando nome e CPF no documento…',
+    comprovanteEndereco: 'Verificando data e endereço no comprovante…',
+    documentoResponsavel: temResponsavel
+      ? 'Conferindo consistência com o cadastro do responsável…'
+      : 'Sem responsável adicional neste envio.',
+  };
+
+  if (st === 'PENDENTE') {
+    const base = log.motivo || 'Aguardando início da triagem automática…';
+    Object.keys(out).forEach((k) => {
+      out[k] = { status: 'pendente', mensagem: base };
+    });
+    return out;
+  }
+
+  if (st === 'PROCESSANDO') {
+    Object.keys(out).forEach((k) => {
+      if (k === 'documentoResponsavel' && !temResponsavel) {
+        out[k] = { status: 'sucesso', mensagem: 'Não aplicável neste cadastro.' };
+      } else {
+        out[k] = { status: 'analisando', mensagem: msgAnalisando[k] };
+      }
+    });
+    return out;
+  }
+
+  if (st === 'APROVADO_IA') {
+    out.laudo = { status: 'sucesso', mensagem: 'Laudo compatível com o CID informado.' };
+    out.documentoPortador = { status: 'sucesso', mensagem: 'Identidade coerente com o cadastro.' };
+    out.comprovanteEndereco = { status: 'sucesso', mensagem: 'Endereço conferido com o cadastro.' };
+    out.documentoResponsavel = temResponsavel
+      ? { status: 'sucesso', mensagem: 'Dados do responsável conferidos no contexto do envio.' }
+      : { status: 'sucesso', mensagem: 'Sem responsável adicional neste cadastro.' };
+    return out;
+  }
+
+  // Fonte principal: resumo de status por documento vindo do backend.
+  if (sd) {
+    const toUi = (row, fallbackOkMsg, fallbackKoMsg) => {
+      const status = (row?.status || '').toUpperCase();
+      if (status === 'NAO_APLICAVEL') {
+        return { status: 'sucesso', mensagem: row?.motivo || 'Não aplicável neste cadastro.' };
+      }
+      if (status === 'VALIDADO') {
+        return { status: 'sucesso', mensagem: row?.motivo || fallbackOkMsg };
+      }
+      if (status === 'INVALIDO') {
+        return { status: 'revisao_manual', mensagem: row?.motivo || fallbackKoMsg };
+      }
+      return { status: 'analisando', mensagem: 'Aguardando conclusão desta etapa...' };
+    };
+    out.laudo = toUi(
+      sd.laudo,
+      'Laudo validado automaticamente.',
+      'Laudo requer conferência manual.'
+    );
+    out.documentoPortador = toUi(
+      sd.identidade,
+      'Documento de identidade validado.',
+      'Identidade requer conferência manual.'
+    );
+    out.comprovanteEndereco = toUi(
+      sd.endereco,
+      'Comprovante de endereço validado.',
+      'Comprovante requer conferência manual.'
+    );
+    out.documentoResponsavel = temResponsavel
+      ? toUi(
+          sd.responsavel,
+          'Dados do responsável consistentes.',
+          'Documento do responsável exige conferência.'
+        )
+      : { status: 'sucesso', mensagem: 'Não aplicável.' };
+    return out;
+  }
+
+  const ocr = etapas.ocr;
+  if (ocr && ocr.ok === false) {
+    const det = ocr.detalhes || {};
+    out.laudo = det.laudo?.ok
+      ? { status: 'sucesso', mensagem: 'Leitura automática ok.' }
+      : { status: 'revisao_manual', mensagem: 'Leitura do laudo inconclusiva. Conferência humana.' };
+    out.documentoPortador = det.doc_tea?.ok
+      ? { status: 'sucesso', mensagem: 'Leitura automática ok.' }
+      : { status: 'revisao_manual', mensagem: 'Leitura do documento do portador inconclusiva.' };
+    out.comprovanteEndereco = det.endereco?.ok
+      ? { status: 'sucesso', mensagem: 'Leitura automática ok.' }
+      : { status: 'revisao_manual', mensagem: 'Leitura do comprovante inconclusiva.' };
+    out.documentoResponsavel = temResponsavel
+      ? { status: 'revisao_manual', mensagem: 'Triagem encaminhada à equipe do PAC.' }
+      : { status: 'sucesso', mensagem: 'Não aplicável.' };
+    return out;
+  }
+
+  const val = etapas.validacao;
+  if (val && typeof val === 'object') {
+    const rl = val.laudo;
+    const idn = val.identidade;
+    const en = val.endereco;
+    out.laudo = rl?.ok
+      ? { status: 'sucesso', mensagem: (rl && rl.motivo) || 'Critérios do laudo atendidos.' }
+      : { status: 'revisao_manual', mensagem: (rl && rl.motivo) || 'Laudo requer conferência humana.' };
+    out.documentoPortador = idn?.ok
+      ? { status: 'sucesso', mensagem: (idn && idn.motivo) || 'Documento ok.' }
+      : { status: 'revisao_manual', mensagem: (idn && idn.motivo) || 'Identidade requer conferência manual.' };
+    out.comprovanteEndereco = en?.ok
+      ? { status: 'sucesso', mensagem: (en && en.motivo) || 'Comprovante ok.' }
+      : { status: 'revisao_manual', mensagem: (en && en.motivo) || 'Endereço requer conferência manual.' };
+    out.documentoResponsavel = temResponsavel
+      ? {
+          status: idn?.ok && en?.ok ? 'sucesso' : 'revisao_manual',
+          mensagem:
+            idn?.ok && en?.ok
+              ? 'Dados do responsável consistentes no contexto analisado.'
+              : 'Pode ser necessário conferir o documento do responsável junto aos demais itens.',
+        }
+      : { status: 'sucesso', mensagem: 'Não aplicável.' };
+    return out;
+  }
+
+  Object.keys(out).forEach((k) => {
+    out[k] = {
+      status: 'revisao_manual',
+      mensagem: 'Análise inicial encaminhada ao PAC para conferência final.',
+    };
+  });
+  return out;
+}
+
 export const useCadastroStore = defineStore('cadastro', {
   state: () => ({
     loading: false,
     loadingCep: false,
     error: null,
     success: false,
+    /** 'form' | 'triagem_ia' | 'final' — após envio com triagem IA */
+    fasePosEnvio: 'form',
+    solicitacaoIdTriagem: null,
+    triagemPollTimerId: null,
+    iaTriagemAutoRedirect: false,
+    iaResultadoGlobal: null,
+    triagemResposta: null,
+    modoCorrecaoSomenteAnexos: false,
+    docsDivergentesCorrecao: [],
+    validacao: createValidacaoInicial(),
     protocolo: null,
     modoEdicao: false,
+    tipoFluxoEdicao: null,
     idSolicitacaoEdicao: null,
     statusLaudo: null,
     statusRgBenef: null,
@@ -93,6 +304,7 @@ export const useCadastroStore = defineStore('cadastro', {
           // Guarda ID e Protocolo para o PATCH posterior
           this.idSolicitacaoEdicao = data.id; 
           this.protocolo = protocolo;
+          this.tipoFluxoEdicao = data.tipo_fluxo || null;
 
           // 2. PREENCHE BENEFICIÁRIO
           // O Serializer retorna o objeto completo em 'beneficiario'
@@ -131,12 +343,14 @@ export const useCadastroStore = defineStore('cadastro', {
 
           // 4. PREENCHE STATUS DOS DOCUMENTOS
           // O Serializer retorna a lista em 'anexos'
+          const parecerHist = mensagemParecerDoHistorico(data.historico);
           if (data.anexos) {
-              data.anexos.forEach(doc => {
-                  if (doc.tipo === 'LAUDO') this.statusLaudo = doc;
-                  if (doc.tipo === 'RG_BENEF') this.statusRgBenef = doc;
-                  if (doc.tipo === 'COMP_RES') this.statusCompRes = doc;
-                  if (doc.tipo === 'RG_RESP') this.statusRgResp = doc;
+              data.anexos.forEach((doc) => {
+                  const d = enriquecerDocComParecerHistorico(doc, parecerHist);
+                  if (doc.tipo === 'LAUDO') this.statusLaudo = d;
+                  if (doc.tipo === 'RG_BENEF') this.statusRgBenef = d;
+                  if (doc.tipo === 'COMP_RES') this.statusCompRes = d;
+                  if (doc.tipo === 'RG_RESP') this.statusRgResp = d;
               });
           }
 
@@ -170,7 +384,13 @@ export const useCadastroStore = defineStore('cadastro', {
           // Ignora campos complexos ou nulos para não quebrar o FormData
           // Também ignoramos 'foto' aqui porque vamos adicionar manualmente abaixo
           if (this.beneficiario[key] && key !== 'responsaveis' && key !== 'foto') {
-              formData.append(key, this.beneficiario[key]);
+              if (key === 'telefone') {
+                formData.append(key, onlyDigits(this.beneficiario[key]));
+              } else if (key === 'cpf' || key === 'cep') {
+                formData.append(key, onlyDigits(this.beneficiario[key]));
+              } else {
+                formData.append(key, sanitizeText(this.beneficiario[key]));
+              }
           }
         });
 
@@ -182,54 +402,124 @@ export const useCadastroStore = defineStore('cadastro', {
 
         // Lógica de Telefone de Segurança (Fallback)
         if (!this.beneficiario.telefone && this.responsaveis.length > 0 && this.responsaveis[0].telefone) {
-             formData.append('telefone', this.responsaveis[0].telefone);
+             formData.append('telefone', onlyDigits(this.responsaveis[0].telefone));
         }
 
-        // 4. DADOS DOS RESPONSÁVEIS (Lista)
-        this.responsaveis.forEach((resp, index) => {
-            formData.append(`responsaveis[${index}]nome`, resp.nome);
-            formData.append(`responsaveis[${index}]cpf`, resp.cpf);
-            formData.append(`responsaveis[${index}]telefone`, resp.telefone);
-            formData.append(`responsaveis[${index}]perfil`, resp.perfil);
-            
-            // Endereço do responsável (copia do beneficiário)
-            formData.append(`responsaveis[${index}]cep`, this.beneficiario.cep);
-            formData.append(`responsaveis[${index}]logradouro`, this.beneficiario.logradouro);
-            formData.append(`responsaveis[${index}]numero`, this.beneficiario.numero);
-            formData.append(`responsaveis[${index}]bairro`, this.beneficiario.bairro);
-            formData.append(`responsaveis[${index}]cidade`, this.beneficiario.cidade);
-            formData.append(`responsaveis[${index}]estado`, this.beneficiario.estado);
-            if(this.beneficiario.complemento) {
-                formData.append(`responsaveis[${index}]complemento`, this.beneficiario.complemento);
-            }
-        });
+        // 4. DADOS DOS RESPONSÁVEIS (JSON único para multipart)
+        const responsaveisPayload = this.responsaveis.map((resp) => ({
+            nome: sanitizeText(resp.nome),
+            cpf: onlyDigits(resp.cpf),
+            telefone: onlyDigits(resp.telefone),
+            perfil: sanitizeText(resp.perfil),
+            cep: onlyDigits(this.beneficiario.cep),
+            logradouro: sanitizeText(this.beneficiario.logradouro),
+            numero: sanitizeText(this.beneficiario.numero),
+            bairro: sanitizeText(this.beneficiario.bairro),
+            cidade: sanitizeText(this.beneficiario.cidade),
+            estado: sanitizeText(this.beneficiario.estado),
+            complemento: sanitizeText(this.beneficiario.complemento),
+        }));
+        formData.append('responsaveis', JSON.stringify(responsaveisPayload));
 
-        // 5. ENVIA PARA A API (Cria Beneficiário + Responsáveis)
+        // 5. Fluxo transacional preferencial (backend novo)
+        const formDataCompleto = new FormData();
+        for (const [key, value] of formData.entries()) {
+            formDataCompleto.append(key, value);
+        }
+        if (this.anexos.laudo) formDataCompleto.append('laudo', this.anexos.laudo);
+        if (this.anexos.rg_beneficiario) formDataCompleto.append('rg_beneficiario', this.anexos.rg_beneficiario);
+        if (this.anexos.comprovante_residencia) formDataCompleto.append('comprovante_residencia', this.anexos.comprovante_residencia);
+        if (this.anexos.rg_responsavel) formDataCompleto.append('rg_responsavel', this.anexos.rg_responsavel);
+
+        let responseCadastroCompleto = null;
+        try {
+          responseCadastroCompleto = await api.post('solicitacoes/cadastro-completo/', formDataCompleto, {
+            headers: {
+              'Content-Type': 'multipart/form-data',
+              'X-Cadastro-Flow': 'transacional'
+            }
+          });
+        } catch (erroCadastroCompleto) {
+          const statusErro = erroCadastroCompleto?.response?.status;
+          if (![404, 405].includes(statusErro)) {
+            throw erroCadastroCompleto;
+          }
+        }
+
+        if (responseCadastroCompleto?.data?.protocolo) {
+          this.protocolo = responseCadastroCompleto.data.protocolo;
+          const sid = responseCadastroCompleto.data.solicitacao_id;
+          this.salvarNoDispositivo({
+            protocolo: this.protocolo,
+            cpf: this.beneficiario.cpf,
+            data_nascimento: this.beneficiario.data_nascimento,
+            nome: this.beneficiario.nome_completo,
+            status: 'ANALISE',
+            status_code: 'ANALISE',
+            foto: this.beneficiario.foto || null,
+            tipo: 'SISTEMA_NOVO',
+            vencida: false,
+            tipo_fluxo: this.tipoFluxoEdicao || 'PRIMEIRA_VIA',
+            solicitacao_id: sid || null,
+          });
+          if (sid) {
+            this.solicitacaoIdTriagem = sid;
+            this.fasePosEnvio = 'triagem_ia';
+            this.iaTriagemAutoRedirect = true;
+            this.limparModoCorrecaoSomenteAnexos();
+            this.success = false;
+            this.iniciarTriagemIaPolling();
+          } else {
+            this.fasePosEnvio = 'final';
+            this.success = true;
+          }
+          return;
+        }
+
+        // 6. Fallback legado (ambientes ainda não atualizados)
         const responseBen = await api.post('beneficiarios/', formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
-        
         const beneficiarioId = responseBen.data.id;
 
-        // 6. CRIA A SOLICITAÇÃO
         const responseSol = await api.post('solicitacoes/', {
           beneficiario_id: beneficiarioId,
           status: 'ABERTO'
+        }, {
+          headers: {
+            'X-Cadastro-Flow': 'fallback'
+          }
         });
 
         const solicitacaoId = responseSol.data.id;
         this.protocolo = responseSol.data.protocolo;
+        this.solicitacaoIdTriagem = solicitacaoId;
+        this.salvarNoDispositivo({
+          protocolo: this.protocolo,
+          cpf: this.beneficiario.cpf,
+          data_nascimento: this.beneficiario.data_nascimento,
+          nome: this.beneficiario.nome_completo,
+          status: 'ANALISE',
+          status_code: 'ANALISE',
+          foto: this.beneficiario.foto || null,
+          tipo: 'SISTEMA_NOVO',
+          vencida: false,
+          tipo_fluxo: this.tipoFluxoEdicao || 'PRIMEIRA_VIA',
+          solicitacao_id: solicitacaoId,
+        });
 
-        // 7. UPLOAD DOS ANEXOS
         await this.uploadAnexo(solicitacaoId, 'LAUDO', 'Laudo Médico', this.anexos.laudo);
         await this.uploadAnexo(solicitacaoId, 'RG_BENEF', 'RG do Beneficiário', this.anexos.rg_beneficiario);
         await this.uploadAnexo(solicitacaoId, 'COMP_RES', 'Comprovante Residência', this.anexos.comprovante_residencia);
-        
         if (this.anexos.rg_responsavel) {
-            await this.uploadAnexo(solicitacaoId, 'RG_RESP', 'RG do Responsável', this.anexos.rg_responsavel);
+          await this.uploadAnexo(solicitacaoId, 'RG_RESP', 'RG do Responsável', this.anexos.rg_responsavel);
         }
-        
-        this.success = true;
+
+        this.fasePosEnvio = 'triagem_ia';
+        this.iaTriagemAutoRedirect = true;
+        this.limparModoCorrecaoSomenteAnexos();
+        this.success = false;
+        this.iniciarTriagemIaPolling();
       
       } catch (err) {
         console.error("Erro API Detalhado:", err.response?.data);
@@ -294,13 +584,210 @@ export const useCadastroStore = defineStore('cadastro', {
         }
     },
 
+    _temResponsavelRelevante() {
+      return (
+        Array.isArray(this.responsaveis) &&
+        this.responsaveis.some(
+          (r) => (r.nome && String(r.nome).trim()) || (r.cpf && onlyDigits(r.cpf))
+        )
+      );
+    },
+
+    pararTriagemIaPolling() {
+      if (this.triagemPollTimerId != null) {
+        clearTimeout(this.triagemPollTimerId);
+        this.triagemPollTimerId = null;
+      }
+    },
+
+    async buscarTriagemIaOnce() {
+      if (!this.solicitacaoIdTriagem) return null;
+      const cpfBase = this.beneficiario?.cpf || this.perfilSalvo?.cpf;
+      const dataNascBase =
+        this.beneficiario?.data_nascimento || this.perfilSalvo?.data_nascimento;
+      const protocoloBase = this.protocolo || this.perfilSalvo?.protocolo;
+      const qCidadao = queryCorrecaoCidadao(
+        protocoloBase,
+        cpfBase,
+        dataNascBase
+      );
+      const url = qCidadao
+        ? `solicitacoes/${this.solicitacaoIdTriagem}/triagem-ia/?${qCidadao}`
+        : `solicitacoes/${this.solicitacaoIdTriagem}/triagem-ia/`;
+      const { data } = await api.get(url);
+      return data;
+    },
+
+    _aplicarTriagemResposta(data) {
+      this.triagemResposta = data || null;
+      this.validacao = mapTriagemParaValidacao(data, this._temResponsavelRelevante());
+    },
+
+    iniciarTriagemIaPolling() {
+      this.pararTriagemIaPolling();
+      this.iaResultadoGlobal = null;
+      this.triagemResposta = null;
+      if (this.perfilSalvo) {
+        this.salvarNoDispositivo({
+          ...this.perfilSalvo,
+          solicitacao_id: this.solicitacaoIdTriagem || this.perfilSalvo.solicitacao_id || null,
+          ia_status: null,
+        });
+      }
+      const temResp = this._temResponsavelRelevante();
+      this.validacao = createValidacaoInicial();
+      if (!temResp) {
+        this.validacao.documentoResponsavel = {
+          status: 'sucesso',
+          mensagem: 'Não aplicável neste cadastro.',
+        };
+      }
+
+      // Encadeia com setTimeout (não setInterval): evita várias requisições em paralelo
+      // se o GET demorar mais que 3s — o próximo poll só agenda após o anterior terminar.
+      let attempts = 0;
+      // ~8 min: OCR/modelos no 1º uso podem levar vários minutos; acima disso, assume fila/worker
+      const maxAttempts = 160;
+
+      const pollLoop = async () => {
+        if (!this.solicitacaoIdTriagem) return;
+        attempts += 1;
+        if (attempts > maxAttempts) {
+          this.triagemPollTimerId = null;
+          this.iaResultadoGlobal = 'REVISAO_MANUAL';
+          const msgTimeout =
+            'A análise automática está demorando mais que o esperado. ' +
+            'Isso costuma indicar fila cheia ou serviço de triagem indisponível. ' +
+            'Seus documentos seguirão para conferência manual do PAC — use Prosseguir abaixo.';
+          const keys = Object.keys(createValidacaoInicial());
+          keys.forEach((k) => {
+            this.validacao[k] = {
+              status: 'revisao_manual',
+              mensagem: msgTimeout,
+            };
+          });
+          return;
+        }
+        try {
+          const data = await this.buscarTriagemIaOnce();
+          if (!data) return;
+          this._aplicarTriagemResposta(data);
+          const st = data.status_validacao;
+          if (st === 'APROVADO_IA' || st === 'REVISAO_MANUAL') {
+            this.iaResultadoGlobal = st;
+            if (this.perfilSalvo) {
+              this.salvarNoDispositivo({
+                ...this.perfilSalvo,
+                solicitacao_id: this.solicitacaoIdTriagem,
+                ia_status: st,
+              });
+            }
+            this.triagemPollTimerId = null;
+            return;
+          }
+        } catch (e) {
+          console.error('triagem-ia', e);
+          this.triagemPollTimerId = null;
+          this.iaResultadoGlobal = 'REVISAO_MANUAL';
+          const errMsg =
+            e?.response?.data?.detail ||
+            e?.response?.data?.erro ||
+            e?.message ||
+            'Não foi possível obter o status da análise.';
+          const keys = Object.keys(createValidacaoInicial());
+          keys.forEach((k) => {
+            this.validacao[k] = {
+              status: 'revisao_manual',
+              mensagem: errMsg,
+            };
+          });
+          return;
+        }
+        this.triagemPollTimerId = setTimeout(() => {
+          void pollLoop();
+        }, 3000);
+      };
+
+      void pollLoop();
+    },
+
+    finalizarFaseTriagemVisual() {
+      this.pararTriagemIaPolling();
+      this.fasePosEnvio = 'final';
+      this.iaTriagemAutoRedirect = false;
+      this.success = true;
+    },
+
+    abrirAcompanhamentoTriagem() {
+      if (!this.solicitacaoIdTriagem) return;
+      this.iaTriagemAutoRedirect = false;
+      this.fasePosEnvio = 'triagem_ia';
+      if (!this.triagemPollTimerId && !this.iaResultadoGlobal) {
+        this.iniciarTriagemIaPolling();
+      }
+    },
+
+    prepararCorrecaoSomenteAnexos(divergencias = []) {
+      this.modoCorrecaoSomenteAnexos = true;
+      this.docsDivergentesCorrecao = Array.isArray(divergencias)
+        ? divergencias
+            .map((d) => d?.documento)
+            .filter(Boolean)
+        : [];
+    },
+
+    limparModoCorrecaoSomenteAnexos() {
+      this.modoCorrecaoSomenteAnexos = false;
+      this.docsDivergentesCorrecao = [];
+    },
+
+    async solicitarCorrecaoPrePac() {
+      if (!this.solicitacaoIdTriagem) return false;
+      const qCidadao = queryCorrecaoCidadao(
+        this.protocolo || this.perfilSalvo?.protocolo,
+        this.beneficiario?.cpf || this.perfilSalvo?.cpf,
+        this.beneficiario?.data_nascimento || this.perfilSalvo?.data_nascimento
+      );
+      if (!qCidadao) return false;
+      await api.patch(
+        `solicitacoes/${this.solicitacaoIdTriagem}/solicitar-correcao-ia/?${qCidadao}`,
+        { mensagem: 'Solicitação de correção iniciada pelo cidadão após triagem IA.' }
+      );
+      const okEdicao = await this.carregarParaEdicao(
+        this.protocolo || this.perfilSalvo?.protocolo,
+        this.beneficiario?.cpf || this.perfilSalvo?.cpf,
+        this.beneficiario?.data_nascimento || this.perfilSalvo?.data_nascimento
+      );
+      if (!okEdicao) return false;
+      this.fasePosEnvio = 'form';
+      this.success = false;
+      return true;
+    },
+
     resetForm() {
+      this.pararTriagemIaPolling();
+      this.limparModoCorrecaoSomenteAnexos();
       this.$reset();
     },
 
     async atualizarExistente() {
       this.loading = true;
       try {
+          const isRenovacao = this.tipoFluxoEdicao === 'RENOVACAO';
+          const possuiResponsavel = Array.isArray(this.responsaveis) && this.responsaveis.length > 0;
+          const possuiDoc = (existente, novoArquivo) => Boolean((existente && existente.id) || novoArquivo);
+          if (isRenovacao) {
+              const faltantes = [];
+              if (!possuiDoc(this.statusLaudo, this.anexos.laudo)) faltantes.push('Laudo Médico');
+              if (!possuiDoc(this.statusRgBenef, this.anexos.rg_beneficiario)) faltantes.push('RG/Certidão do Beneficiário');
+              if (!possuiDoc(this.statusCompRes, this.anexos.comprovante_residencia)) faltantes.push('Comprovante de Residência');
+              if (possuiResponsavel && !possuiDoc(this.statusRgResp, this.anexos.rg_responsavel)) faltantes.push('RG/CNH do Responsável');
+              if (faltantes.length) {
+                  this.error = `Para enviar a renovação, anexe os documentos obrigatórios: ${faltantes.join(', ')}.`;
+                  return;
+              }
+          }
+
           // 1. PREPARA DADOS DO BENEFICIÁRIO (Texto + Foto + Responsáveis)
           const formData = new FormData();
 
@@ -308,36 +795,58 @@ export const useCadastroStore = defineStore('cadastro', {
           Object.keys(this.beneficiario).forEach(key => {
               // Ignora campos complexos ou nulos para não quebrar o FormData
               if (this.beneficiario[key] && key !== 'responsaveis' && key !== 'foto') {
-                  formData.append(key, this.beneficiario[key]);
+                  if (key === 'telefone') {
+                      formData.append(key, onlyDigits(this.beneficiario[key]));
+                  } else if (key === 'cpf' || key === 'cep') {
+                      formData.append(key, onlyDigits(this.beneficiario[key]));
+                  } else {
+                      formData.append(key, sanitizeText(this.beneficiario[key]));
+                  }
               }
           });
 
           // B. Foto do Perfil (Só envia se o usuário selecionou uma nova no input)
           // Nota: this.anexos.foto guarda o arquivo 'File' novo. 
           if (this.anexos.foto) {
-              console.log("Anexando nova foto ao envio:", this.anexos.foto.name); // <--- DEBUG
               formData.append('foto', this.anexos.foto);
-          } else {
-              console.log("Nenhuma foto nova selecionada. Mantendo a antiga.");
           }
 
           // C. Responsáveis (Lista)
           // Precisamos reenviar a lista para o backend atualizar os vínculos
-          this.responsaveis.forEach((resp, index) => {
-              formData.append(`responsaveis[${index}]nome`, resp.nome);
-              formData.append(`responsaveis[${index}]cpf`, resp.cpf);
-              formData.append(`responsaveis[${index}]telefone`, resp.telefone);
-              formData.append(`responsaveis[${index}]perfil`, resp.perfil);
-              
-              // Se necessário reenviar endereço dos responsáveis (caso seu backend exija):
-              // formData.append(`responsaveis[${index}]cep`, this.beneficiario.cep);
-              // ... outros campos de endereço
-          });
+          const responsaveisPayload = this.responsaveis.map((resp) => ({
+              nome: sanitizeText(resp.nome),
+              cpf: onlyDigits(resp.cpf),
+              telefone: onlyDigits(resp.telefone),
+              perfil: sanitizeText(resp.perfil),
+              cep: onlyDigits(this.beneficiario.cep),
+              logradouro: sanitizeText(this.beneficiario.logradouro),
+              numero: sanitizeText(this.beneficiario.numero),
+              bairro: sanitizeText(this.beneficiario.bairro),
+              cidade: sanitizeText(this.beneficiario.cidade),
+              estado: sanitizeText(this.beneficiario.estado),
+              complemento: sanitizeText(this.beneficiario.complemento),
+          }));
+          formData.append('responsaveis', JSON.stringify(responsaveisPayload));
 
-          // D. Envia atualização do Beneficiário
-          await api.patch(`beneficiarios/${this.beneficiario.id}/`, formData, {
-              headers: { 'Content-Type': 'multipart/form-data' }
-          });
+          const qCidadao = queryCorrecaoCidadao(
+            this.protocolo,
+            this.beneficiario?.cpf,
+            this.beneficiario?.data_nascimento
+          );
+          if (!qCidadao) {
+            this.error =
+              'Não foi possível identificar sua sessão. Abra novamente o formulário com protocolo e CPF.';
+            return;
+          }
+
+          // D. Atualização do beneficiário (rota pública com mesma prova de posse de buscar-completo)
+          await api.patch(
+            `beneficiarios/${this.beneficiario.id}/atualizacao-cidadao/?${qCidadao}`,
+            formData,
+            {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            }
+          );
 
           // 2. FUNÇÃO INTELIGENTE DE UPLOAD DE DOCUMENTOS
           const processarDocumento = async (arquivoInput, docExistente, tipo) => {
@@ -353,7 +862,6 @@ export const useCadastroStore = defineStore('cadastro', {
 
               if (docExistente && docExistente.id) {
                   // Cenario A: Substitui documento existente (PATCH)
-                  console.log(`Atualizando doc ${tipo} ID: ${docExistente.id}`);
                   await api.patch(`documentos/${docExistente.id}/`, docData, {
                       headers: { 'Content-Type': 'multipart/form-data' }
                   });
@@ -375,11 +883,17 @@ export const useCadastroStore = defineStore('cadastro', {
 
           // 4. ATUALIZA STATUS DA SOLICITAÇÃO
           // Move de 'PENDENTE' (Vermelho) para 'ANALISE' (Amarelo) no Kanban
-          await api.patch(`solicitacoes/${this.idSolicitacaoEdicao}/`, { 
-               status: 'ANALISE'
-          });
-          
-          this.success = true; // Ativa a tela de sucesso
+          await api.patch(
+            `solicitacoes/${this.idSolicitacaoEdicao}/atualizacao-cidadao/?${qCidadao}`,
+            { status: 'ANALISE' }
+          );
+
+          this.solicitacaoIdTriagem = this.idSolicitacaoEdicao;
+          this.fasePosEnvio = 'triagem_ia';
+          this.iaTriagemAutoRedirect = true;
+          this.limparModoCorrecaoSomenteAnexos();
+          this.success = false;
+          this.iniciarTriagemIaPolling();
 
       } catch (error) {
           console.error(error);
@@ -400,24 +914,42 @@ export const useCadastroStore = defineStore('cadastro', {
             protocolo: dados.protocolo,
             cpf: dados.cpf,             // Atenção: Em produção real, ideal seria encriptar
             data_nascimento: dados.data_nascimento,
-            nome: dados.nome_beneficiario,
-            status: dados.status
+            nome: dados.nome || dados.nome_beneficiario || '',
+            status: dados.status,
+            status_code: dados.status_code || dados.status,
+            foto: dados.foto || null,
+            tipo: dados.tipo || 'SISTEMA_NOVO',
+            vencida: Boolean(dados.vencida),
+            tipo_fluxo: dados.tipo_fluxo || 'PRIMEIRA_VIA',
+            solicitacao_id: dados.solicitacao_id || null,
+            ia_status: dados.ia_status || null,
         };
         
-        localStorage.setItem('ciptea_user', JSON.stringify(dadosPersistencia));
+        sessionStorage.setItem('ciptea_user', JSON.stringify(dadosPersistencia));
+        localStorage.removeItem('ciptea_user');
         this.perfilSalvo = dadosPersistencia;
+        if (dadosPersistencia.solicitacao_id && !this.solicitacaoIdTriagem) {
+            this.solicitacaoIdTriagem = dadosPersistencia.solicitacao_id;
+        }
     },
     
     carregarDoDispositivo() {
-        const salvo = localStorage.getItem('ciptea_user');
+        const salvo = sessionStorage.getItem('ciptea_user') || localStorage.getItem('ciptea_user');
         if (salvo) {
             this.perfilSalvo = JSON.parse(salvo);
+            // Migração silenciosa para sessionStorage
+            sessionStorage.setItem('ciptea_user', salvo);
+            localStorage.removeItem('ciptea_user');
+            if (this.perfilSalvo?.solicitacao_id && !this.solicitacaoIdTriagem) {
+                this.solicitacaoIdTriagem = this.perfilSalvo.solicitacao_id;
+            }
             return true;
         }
         return false;
     },
 
     esquecerDispositivo() {
+        sessionStorage.removeItem('ciptea_user');
         localStorage.removeItem('ciptea_user');
         this.perfilSalvo = null;
         this.consulta.resultado = null;
@@ -434,3 +966,6 @@ export const useCadastroStore = defineStore('cadastro', {
     },
   }
 });
+
+/** Alias pedido para integrações / legibilidade ("CIPTEA store"). */
+export { useCadastroStore as useCipteaStore };

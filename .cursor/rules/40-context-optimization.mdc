@@ -1,0 +1,21 @@
+---
+description: Reduzir indexação inútil e custo de contexto no Cursor (v2026)
+globs: "**/*"
+alwaysApply: true
+---
+
+# Otimização de Contexto e Seleção de Modelos
+
+## Estratégia de Modelos (API Key Ativa)
+- **Tarefas Complexas/Arquitetura:** Priorizar `Sonnet 4.6` ou `GPT-5.5`.
+- **Refatoração Rápida/Explicação:** Usar `GPT-5.4 Mini` ou `Gemini 3 Flash` para economizar saldo da API.
+- **Composer:** Utilizar preferencialmente `Sonnet 4.6` para escrita de código multi-arquivo.
+
+## Regras de .cursorignore (Crítico para Custo)
+O Cursor DEVE respeitar o arquivo `.cursorignore` para evitar o "Cache Read" massivo identificado nos logs.
+
+### Prioridades de Exclusão:
+- **Dependências:** `venv/`, `.venv/`, `node_modules/`
+- **Build/Cache:** `dist/`, `build/`, `__pycache__/`, `.vite/`, `.nuxt/`, `.cache/`
+- **Data/Logs:** `*.sqlite3`, `*.db`, `*.log`, `*.csv` (exceto se pedido), `*.jsonl`
+- **Media:** `public/assets/`, `*.png`, `*.jpg`, `*.svg`, `*.pdf`, `*.woff2`
