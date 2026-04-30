@@ -1,5 +1,5 @@
 [Unit]
-Description=Celery Worker Service for CIPTEA
+Description=Celery IA Worker Service for CIPTEA
 After=network.target redis-server.service
 
 [Service]
@@ -9,7 +9,7 @@ Group=www-data
 WorkingDirectory=/var/www/ciptea
 EnvironmentFile=/var/www/ciptea/.env
 Environment=DJANGO_SETTINGS_MODULE=core.settings
-ExecStart=/var/www/ciptea/venv/bin/celery -A core worker -l info -c 4 -Q ciptea -n worker_main@%%h
+ExecStart=/var/www/ciptea/venv/bin/celery -A core worker -l info -Q ia_tasks --concurrency=2 --max-tasks-per-child=10 -n worker_ia@%%h
 Restart=always
 RestartSec=5
 

@@ -61,11 +61,39 @@ def _pode_disparar_triagem_ia(solicitacao):
     return True
 
 
+def _doc_ids_atuais_para_triagem(solicitacao):
+    return {
+        'LAUDO': Documento.objects.filter(solicitacao=solicitacao, tipo='LAUDO').order_by('-id').values_list('id', flat=True).first(),
+        'IDENTIDADE': Documento.objects.filter(solicitacao=solicitacao, tipo='RG_BENEF').order_by('-id').values_list('id', flat=True).first(),
+        'ENDERECO': Documento.objects.filter(solicitacao=solicitacao, tipo='COMP_RES').order_by('-id').values_list('id', flat=True).first(),
+        'RESPONSAVEL': Documento.objects.filter(solicitacao=solicitacao, tipo='RG_RESP').order_by('-id').values_list('id', flat=True).first(),
+    }
+
+
+def _ha_documento_novo_pendente_triagem(validacao, solicitacao):
+    """
+    Permite novo enqueue quando já existe triagem em PROCESSANDO, mas houve
+    atualização de documento após o último lote orquestrado.
+    """
+    log_atual = validacao.log_ia if isinstance(validacao.log_ia, dict) else {}
+    etapas = log_atual.get('etapas') if isinstance(log_atual.get('etapas'), dict) else {}
+    orq = etapas.get('orquestracao') if isinstance(etapas.get('orquestracao'), dict) else {}
+    ids_alvo = orq.get('doc_ids_alvo') if isinstance(orq.get('doc_ids_alvo'), dict) else {}
+    if not ids_alvo:
+        return True
+
+    ids_atuais = _doc_ids_atuais_para_triagem(solicitacao)
+    for k, doc_id_atual in ids_atuais.items():
+        if doc_id_atual and doc_id_atual != ids_alvo.get(k):
+            return True
+    return False
+
+
 def _disparar_triagem_ia_async(solicitacao):
     if not _pode_disparar_triagem_ia(solicitacao):
         return
     validacao, _ = ValidacaoDocumentoIA.objects.get_or_create(solicitacao=solicitacao)
-    if validacao.status_validacao == 'PROCESSANDO':
+    if validacao.status_validacao == 'PROCESSANDO' and not _ha_documento_novo_pendente_triagem(validacao, solicitacao):
         return
     try:
         from .tasks import process_ciptea_documents

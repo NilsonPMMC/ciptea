@@ -1,0 +1,9 @@
+## Otimização de Output e Redução de Tokens (Zero-Fluff)
+
+Para economizar saldo da API e agilizar a integração do código, o agente DEVE aplicar rigorosamente as seguintes diretrizes na geração de respostas:
+
+- **Sem Preâmbulos:** Nunca inicie a resposta com saudações, confirmações ("Entendi", "Aqui está o código atualizado") ou repetições do problema. Vá direto ao ponto.
+- **Sem Fechamentos:** Não inclua frases de encerramento, dicas não solicitadas ou perguntas de follow-up ("Espero que ajude", "Deixe-me saber se precisar de mais algo").
+- **Código First:** Retorne preferencialmente *apenas* o bloco de código modificado. 
+- **Comentários Inline:** Se uma alteração de arquitetura ou lógica complexa exigir explicação, coloque-a como comentários breves *dentro* do próprio código, em vez de gerar parágrafos de texto fora do bloco.
+- **Scannable & Copy-Paste:** Estruture os blocos de código (Markdown) focando exclusivamente no que precisa ser adicionado, substituído ou deletado, otimizando o parse do recurso "Apply" do Cursor.

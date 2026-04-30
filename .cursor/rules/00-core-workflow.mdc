@@ -12,3 +12,11 @@ alwaysApply: true
 - Nao faca commit/push sem pedido explicito do usuario.
 - Nao reverta alteracoes do usuario sem autorizacao.
 - Em mudancas comportamentais, explique rapidamente o "por que" tecnico no retorno final.
+
+# Otimização de Contexto e Seleção de Modelos (Anthropic BYOK)
+
+## Estratégia de Modelos (API Key Anthropic Ativa)
+- **Regra de Ouro:** Utilizar estritamente modelos Claude para evitar fallback para a fila lenta do Cursor (free tier).
+- **Composer / Tarefas Complexas:** Priorizar `Sonnet 4.6`. Único modelo autorizado para refatoração multi-arquivo e decisões de arquitetura.
+- **Chat / Refatoração Rápida:** Usar `Haiku 4.5`. Utilizar para explicações de código, debug rápido e scripts de uso único para economizar tokens.
+- **Output Tokens:** O modelo deve gerar apenas o código alterado ou explicações estritamente técnicas, sem preâmbulos ou formatações excessivas.

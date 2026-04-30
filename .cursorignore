@@ -63,3 +63,19 @@ logs/
 .vscode/
 .idea/
 .DS_Store
+
+# Lock files (Textos gigantes que o RAG do Cursor tenta ler sem necessidade)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+poetry.lock
+Pipfile.lock
+
+# Front-end compilado/minificado
+*.min.js
+*.min.css
+
+# Artefatos específicos do seu pipeline de IA (CIPTEA)
+# JSONs de dataset pesam muito no contexto
+calibration_report.json
+calibration_samples.json
