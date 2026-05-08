@@ -76,7 +76,7 @@
                     color="primary"
                   />
                   <v-icon v-else-if="item.status === 'sucesso'" icon="mdi-check-circle" color="success" size="22" />
-                  <v-icon v-else-if="item.status === 'revisao_manual'" icon="mdi-account-supervisor" color="info" size="22" />
+                  <v-icon v-else-if="item.status === 'revisao_manual'" icon="mdi-account-supervisor" color="warning" size="22" />
                   <v-icon v-else icon="mdi-clock-outline" color="grey" size="22" />
                 </template>
                 <div class="text-subtitle-2 font-weight-bold">{{ item.titulo }}</div>
@@ -112,7 +112,7 @@
               <v-card-text>
                 <div class="text-body-2 mb-3">Foram identificadas divergências automáticas.</div>
                 <div
-                  v-for="d in store.triagemResposta?.resumo_divergencias || []"
+                  v-for="d in divergenciasIa"
                   :key="`${d.documento}-${d.codigo}`"
                   class="mb-2"
                 >
@@ -137,23 +137,27 @@
                   class="mb-3"
                 >
                   <v-file-input
-                    v-model="arquivosCorrecao[mapDocumentoParaAnexo(d.documento)]"
-                    :label="`Novo arquivo - ${d.titulo}`"
+                    v-model="arquivosCorrecao[d.documento]"
+                    :label="getLabelDivergencia(d)"
                     density="comfortable"
                     variant="outlined"
                     prepend-icon="mdi-paperclip"
                     accept=".pdf,.jpg,.jpeg,.png,.webp"
                     show-size
                     clearable
+                    base-color="white"
+                    color="warning"
+                    theme="dark"
                   />
                 </div>
                 <v-btn
                   color="warning"
+                  block
                   prepend-icon="mdi-upload"
                   :loading="loadingReenvioDivergente"
                   @click="reenviarDivergentes"
                 >
-                  Reenviar
+                  REENVIAR
                 </v-btn>
               </v-card-text>
             </v-card>
@@ -178,12 +182,30 @@
 
       <div v-if="store.fasePosEnvio === 'form' && !store.success">
         <v-tabs v-if="!somenteCorrecaoAnexos" v-model="step" grow color="primary" class="mb-4">
-          <v-tab :value="1">1. Dados</v-tab>
-          <v-tab :value="2">2. Resp.</v-tab>
-          <v-tab :value="3">3. Docs</v-tab>
+          <v-tab :value="1">
+            <v-badge :model-value="stepErrors[1]" color="error" dot>1. Dados</v-badge>
+          </v-tab>
+          <v-tab :value="2">
+            <v-badge :model-value="stepErrors[2]" color="error" dot>2. Resp.</v-badge>
+          </v-tab>
+          <v-tab :value="3">
+            <v-badge :model-value="stepErrors[3]" color="error" dot>3. Docs</v-badge>
+          </v-tab>
         </v-tabs>
         <v-alert
-          v-else
+          v-if="temErrosFormulario && !somenteCorrecaoAnexos"
+          type="error"
+          variant="tonal"
+          border="start"
+          density="compact"
+          class="mx-4 mt-2 mb-4"
+          icon="mdi-alert-circle"
+        >
+          <strong>Atenção:</strong> Existem campos com erro ou obrigatórios em branco. Verifique as abas sinalizadas com um ponto vermelho.
+        </v-alert>
+
+        <v-alert
+          v-else-if="somenteCorrecaoAnexos"
           type="warning"
           variant="tonal"
           border="start"
@@ -322,19 +344,19 @@
 
               <div v-for="(resp, i) in store.responsaveis" :key="i">
                   <v-card class="mb-4 pa-4 border" variant="flat">
+                      
+                      <v-checkbox
+                          v-if="i === 0"
+                          v-model="isProprioBeneficiario"
+                          label="O beneficiário é o próprio responsável"
+                          color="primary"
+                          density="compact"
+                          class="mt-n2"
+                          hide-details
+                      ></v-checkbox>
+
                       <div class="d-flex justify-space-between mb-2">
-                          <span class="text-subtitle-2 font-weight-bold text-grey-darken-1">
-                              Responsável {{ i + 1 }}
-                          </span>
-                          <v-btn 
-                              v-if="i > 0" 
-                              icon="mdi-delete" 
-                              size="x-small" 
-                              color="error" 
-                              variant="text"
-                              @click="store.removerResponsavel(i)"
-                          ></v-btn>
-                      </div>
+                          </div>
 
                       <v-row dense>
                           <v-col cols="12">
@@ -342,8 +364,7 @@
                                   label="Vínculo*" 
                                   v-model="resp.perfil"
                                   :items="listaVinculos"
-                                  item-title="title"
-                                  item-value="value"
+                                  :disabled="isProprioBeneficiario && i === 0"
                                   variant="outlined"
                                   density="comfortable"
                               ></v-select>
@@ -352,9 +373,9 @@
                               <v-text-field 
                                   label="Nome Completo*" 
                                   v-model="resp.nome" 
+                                  :disabled="isProprioBeneficiario && i === 0"
                                   variant="outlined"
                                   density="comfortable"
-                                  :error-messages="getErro(`responsaveis[${i}].nome`)"
                               ></v-text-field>
                           </v-col>
                           <v-col cols="12" md="6">
@@ -362,11 +383,12 @@
                                   label="CPF*" 
                                   v-maska="'###.###.###-##'" 
                                   v-model="resp.cpf" 
+                                  :disabled="isProprioBeneficiario && i === 0"
                                   variant="outlined"
                                   density="comfortable"
-                                  :error-messages="getErro(`responsaveis[${i}].cpf`)"
                               ></v-text-field>
                           </v-col>
+
                           <v-col cols="12" md="6">
                               <v-text-field 
                                   label="Celular/WhatsApp*" 
@@ -375,6 +397,22 @@
                                   variant="outlined"
                                   density="comfortable"
                               ></v-text-field>
+                          </v-col>
+                          
+                          <v-col cols="12" v-if="!(isProprioBeneficiario && i === 0)">
+                              <v-file-input 
+                                  label="RG/CNH deste Responsável*" 
+                                  variant="outlined"
+                                  density="comfortable"
+                                  prepend-icon="mdi-badge-account-horizontal-outline"
+                                  accept="image/*, application/pdf"
+                                  @update:model-value="files => resp.documento_identidade = files ? (Array.isArray(files) ? files[0] : files) : null"
+                              ></v-file-input>
+                          </v-col>
+                          <v-col cols="12" v-else>
+                              <v-alert type="success" variant="tonal" density="compact" icon="mdi-link-variant">
+                                  O documento de identidade do beneficiário será utilizado como comprovação.
+                              </v-alert>
                           </v-col>
                       </v-row>
                   </v-card>
@@ -391,6 +429,7 @@
               <v-alert type="info" variant="tonal" class="mb-4 text-caption" density="compact">
                 Arquivos aceitos: Fotos (JPG/PNG) ou PDF.
               </v-alert>
+              
               <v-alert
                 v-if="isRenovacaoEdicao"
                 type="warning"
@@ -402,9 +441,9 @@
                 <strong>Documentos obrigatórios para concluir a renovação:</strong><br>
                 - Laudo Médico com CID<br>
                 - RG/Certidão do Beneficiário<br>
-                - Comprovante de Residência<br>
-                <span v-if="temResponsavel">- RG/CNH do Responsável</span>
+                - Comprovante de Residência
               </v-alert>
+              
               <v-card v-if="isRenovacaoEdicao" variant="tonal" class="mb-4">
                 <v-card-text class="py-3">
                   <div class="text-subtitle-2 font-weight-bold mb-2 text-grey-darken-3">
@@ -422,15 +461,6 @@
                     <v-chip :color="checklistDocs.compRes.ok ? 'success' : 'error'" size="small" variant="flat">
                       <v-icon start :icon="checklistDocs.compRes.ok ? 'mdi-check-circle' : 'mdi-alert-circle'"></v-icon>
                       {{ checklistDocs.compRes.label }}
-                    </v-chip>
-                    <v-chip
-                      v-if="temResponsavel"
-                      :color="checklistDocs.rgResp.ok ? 'success' : 'error'"
-                      size="small"
-                      variant="flat"
-                    >
-                      <v-icon start :icon="checklistDocs.rgResp.ok ? 'mdi-check-circle' : 'mdi-alert-circle'"></v-icon>
-                      {{ checklistDocs.rgResp.label }}
                     </v-chip>
                   </div>
                 </v-card-text>
@@ -521,36 +551,6 @@
                   </v-alert>
               </div>
 
-              <div class="mb-4">
-                  <v-file-input 
-                    label="RG/CNH do Responsável" 
-                    hint="Obrigatório se o beneficiário for menor"
-                    persistent-hint
-                    variant="outlined"
-                    density="comfortable"
-                    prepend-icon="mdi-account-box"
-                    accept="image/*, application/pdf"
-                    @update:model-value="files => store.anexos.rg_responsavel = files ? files : null"
-                    :disabled="somenteCorrecaoAnexos && !campoDivergente('rg_responsavel')"
-                    :color="campoDivergente('rg_responsavel') ? 'warning' : undefined"
-                    :messages="campoDivergente('rg_responsavel') ? ['Documento com divergência da IA: envie uma nova versão.'] : []"
-                    :error-messages="store.statusRgResp?.status === 'REJEITADO' ? 'Documento recusado' : ''"
-                    :base-color="campoDivergente('rg_responsavel') ? 'warning' : (store.statusRgResp?.status === 'REJEITADO' ? 'error' : (store.statusRgResp?.status === 'APROVADO' ? 'success' : ''))"
-                    :class="{ 'doc-divergente': campoDivergente('rg_responsavel') }"
-                  >
-                      <template v-slot:append-inner v-if="store.statusRgResp?.status === 'APROVADO'">
-                          <v-icon color="success" icon="mdi-check-circle"></v-icon>
-                      </template>
-                  </v-file-input>
-
-                  <v-alert 
-                      v-if="store.statusRgResp?.status === 'REJEITADO'"
-                      type="error" variant="tonal" density="compact" class="mt-1" icon="mdi-alert-circle"
-                  >
-                      <strong>Motivo:</strong> {{ store.statusRgResp.motivo_rejeicao }}
-                  </v-alert>
-              </div>
-
               <v-divider class="my-6"></v-divider>
 
               <div v-if="store.error" class="text-red mb-3 text-center font-weight-bold">
@@ -629,6 +629,51 @@ const listaVinculos = [
     { title: 'Próprio Beneficiário', value: 'PROPRIO' },
     { title: 'Outro', value: 'OUTRO' }
 ];
+// Controle para o fluxo de "Próprio Beneficiário"
+const isProprioBeneficiario = ref(false);
+
+// Sincroniza dados do beneficiário para o primeiro responsável
+watch(isProprioBeneficiario, (val) => {
+    if (val) {
+        // Validação de Maioridade (18+ anos)
+        if (!store.beneficiario.data_nascimento) {
+            toast.warning("Preencha a data de nascimento do beneficiário (Passo 1) primeiro.");
+            isProprioBeneficiario.value = false;
+            return;
+        }
+        
+        const dob = new Date(store.beneficiario.data_nascimento);
+        const hoje = new Date();
+        let idade = hoje.getFullYear() - dob.getFullYear();
+        const m = hoje.getMonth() - dob.getMonth();
+        if (m < 0 || (m === 0 && hoje.getDate() < dob.getDate())) {
+            idade--;
+        }
+        
+        if (idade < 18) {
+            toast.error("O beneficiário precisa ter 18 anos ou mais para ser o próprio responsável.");
+            isProprioBeneficiario.value = false;
+            return;
+        }
+
+        if (store.responsaveis.length > 0) {
+            const resp = store.responsaveis[0];
+            resp.nome = store.beneficiario.nome_completo;
+            resp.cpf = store.beneficiario.cpf;
+            resp.perfil = 'PROPRIO';
+            resp.status_documento = 'APROVADO'; 
+        }
+    } else if (!val && store.responsaveis.length > 0) {
+        store.responsaveis[0].perfil = null;
+    }
+});
+
+// Watch auxiliar para manter sincronizado caso o usuário mude o nome no Passo 1 e volte
+watch(() => store.beneficiario.nome_completo, (novoNome) => {
+    if (isProprioBeneficiario.value && store.responsaveis.length > 0) {
+        store.responsaveis[0].nome = novoNome;
+    }
+});
 const isRenovacaoEdicao = computed(() => store.modoEdicao && store.tipoFluxoEdicao === 'RENOVACAO');
 const temResponsavel = computed(() => Array.isArray(store.responsaveis) && store.responsaveis.length > 0);
 const checklistDocs = computed(() => {
@@ -646,86 +691,188 @@ const checklistDocs = computed(() => {
             label: 'Comprovante Residência',
             ok: possuiDoc(store.statusCompRes, store.anexos.comprovante_residencia),
         },
-        rgResp: {
-            label: 'RG/CNH Responsável',
-            ok: possuiDoc(store.statusRgResp, store.anexos.rg_responsavel),
-        },
     };
 });
+
+const podeReenviarDivergentes = computed(() => {
+    return store.iaResultadoGlobal === 'REVISAO_MANUAL' && divergenciasIa.value.length > 0;
+});
+
+const somenteCorrecaoAnexos = computed(() => store.modoCorrecaoSomenteAnexos);
+
+const campoDivergente = (campo) => {
+    return divergenciasIa.value.some(d => d.documento === campo);
+};
+
+const normalizarArquivoInput = (file) => {
+    return Array.isArray(file) ? file[0] : file;
+};
 
 const dotPorStatus = (status) => {
   if (status === 'analisando') return 'primary';
   if (status === 'sucesso') return 'success';
-  if (status === 'revisao_manual') return 'info';
+  if (status === 'revisao_manual') return 'warning';
   return 'grey';
 };
 
-const itensValidacaoIa = computed(() => {
-  const v = store.validacao || {};
-  const docsOrquestrados = store.triagemResposta?.log_ia?.etapas?.orquestracao?.documentos;
-  const filtro = Array.isArray(docsOrquestrados) ? new Set(docsOrquestrados) : null;
-  const pick = (key, titulo) => {
-    const row = v[key] || { status: 'pendente', mensagem: '' };
-    return {
-      key,
-      titulo,
-      status: row.status,
-      mensagem: row.mensagem,
-      dotColor: dotPorStatus(row.status),
-    };
-  };
-  const rows = [
-    { etapa: 'LAUDO', item: pick('laudo', 'Laudo Médico') },
-    { etapa: 'IDENTIDADE', item: pick('documentoPortador', 'RG/CNH do portador (TEA)') },
-    { etapa: 'RESPONSAVEL', item: pick('documentoResponsavel', 'RG/CNH do responsável') },
-    { etapa: 'ENDERECO', item: pick('comprovanteEndereco', 'Comprovante de endereço') },
-  ];
-  return filtro ? rows.filter((r) => filtro.has(r.etapa)).map((r) => r.item) : rows.map((r) => r.item);
+// Leitor seguro do Log da IA (resolve o problema do Django devolver JSON como String)
+const logIa = computed(() => {
+    let log = store.triagemResposta?.log_ia;
+    if (typeof log === 'string') {
+        try { return JSON.parse(log); } catch(e) { return {}; }
+    }
+    return log || {};
 });
-const divergenciasIa = computed(() => store.triagemResposta?.resumo_divergencias || []);
-const podeReenviarDivergentes = computed(
-  () => store.iaResultadoGlobal === 'REVISAO_MANUAL' && Boolean(store.triagemResposta?.pode_correcao_cidadao)
-);
-const somenteCorrecaoAnexos = computed(() => Boolean(store.modoCorrecaoSomenteAnexos));
 
+// 1. Timeline Dinâmica e Blindada
+const itensValidacaoIa = computed(() => {
+  const orq = logIa.value?.etapas?.orquestracao || {};
+  const val = logIa.value?.etapas?.validacao || {};
+  const docsOrquestrados = orq.documentos || [];
+
+  const pick = (key, titulo) => {
+    let statusFront = 'pendente';
+    let msg = '';
+    
+    if (val[key]) {
+        statusFront = val[key].ok ? 'sucesso' : 'revisao_manual';
+        msg = val[key].motivo || '';
+    } else if (store.validacao && store.validacao[key]) {
+        statusFront = store.validacao[key].status === 'VALIDADO' ? 'sucesso' : 
+                      store.validacao[key].status === 'INVALIDO' ? 'revisao_manual' : 'pendente';
+        msg = store.validacao[key].motivo || '';
+    }
+    
+    if (statusFront === 'pendente' && (store.iaResultadoGlobal === 'PROCESSANDO' || store.iaResultadoGlobal === 'PENDENTE')) {
+        statusFront = 'analisando';
+    }
+
+    return { key, titulo, status: statusFront, mensagem: msg, dotColor: dotPorStatus(statusFront) };
+  };
+
+  const rows = [];
+  const responsaveisAtuais = store.responsaveis || [];
+  
+  docsOrquestrados.forEach(doc => {
+      const keyStr = doc.toLowerCase();
+      if (keyStr === 'laudo') rows.push(pick('laudo', 'Laudo Médico'));
+      else if (keyStr === 'identidade') rows.push(pick('identidade', 'RG/CNH do portador (TEA)'));
+      else if (keyStr === 'endereco') rows.push(pick('endereco', 'Comprovante de endereço'));
+      else if (keyStr.startsWith('responsavel_')) {
+          const idx = parseInt(keyStr.split('_')[1]);
+          const nome = responsaveisAtuais[idx] ? responsaveisAtuais[idx].nome : `Responsável ${idx+1}`;
+          rows.push(pick(keyStr, `RG: ${nome}`));
+      }
+  });
+  
+  if (rows.length === 0) {
+      rows.push(pick('laudo', 'Laudo Médico'));
+      rows.push(pick('identidade', 'RG/CNH do portador (TEA)'));
+      rows.push(pick('endereco', 'Comprovante de endereço'));
+      responsaveisAtuais.forEach((resp, i) => {
+          rows.push(pick(`responsavel_${i}`, `RG: ${resp.nome || 'Responsável ' + (i+1)}`));
+      });
+  }
+
+  return rows;
+});
+
+// 2. Caçador Universal de Divergências
+const divergenciasIa = computed(() => {
+    const divs = [...(store.triagemResposta?.resumo_divergencias || [])];
+    const val = logIa.value?.etapas?.validacao || {};
+    
+    const nomesPadrao = { laudo: 'Laudo Médico', identidade: 'RG/CNH do portador (TEA)', endereco: 'Comprovante de Endereço' };
+    const responsaveisAtuais = store.responsaveis || [];
+
+    // Varre TODOS os documentos na validação, garantindo que o frontend caça os erros sozinho
+    Object.keys(val).forEach(key => {
+        if (val[key].ok === false) {
+            if (!divs.find(d => d.documento === key)) {
+                let tituloDoc = nomesPadrao[key] || 'Documento';
+                if (key.startsWith('responsavel_')) {
+                    const idx = parseInt(key.split('_')[1]);
+                    const nome = responsaveisAtuais[idx] ? responsaveisAtuais[idx].nome : `Responsável ${idx+1}`;
+                    tituloDoc = `RG/CNH - ${nome}`;
+                }
+                divs.push({
+                    documento: key,
+                    titulo: tituloDoc,
+                    codigo: 'DIVERGENCIA_DOCUMENTO',
+                    motivo: val[key].motivo || 'Documento recusado ou ilegível pela IA.'
+                });
+            }
+        }
+    });
+    
+    return divs;
+});
+
+// 2. Mapeamento de chaves para suportar indices (ex: responsavel_0)
 const mapDocumentoParaAnexo = (docKey) => {
   if (docKey === 'laudo') return 'laudo';
   if (docKey === 'identidade') return 'rg_beneficiario';
   if (docKey === 'endereco') return 'comprovante_residencia';
-  if (docKey === 'responsavel') return 'rg_responsavel';
+  if (docKey.startsWith('responsavel')) return docKey; // Mantém responsavel_0, responsavel_1...
   return 'laudo';
 };
-const camposDivergentesAnexos = computed(() => {
-  const base = Array.isArray(store.docsDivergentesCorrecao) ? store.docsDivergentesCorrecao : [];
-  return new Set(base.map((k) => mapDocumentoParaAnexo(k)));
-});
-const campoDivergente = (anexoKey) => camposDivergentesAnexos.value.has(anexoKey);
 
+// 3. Função para gerar o Label amigável no Reenvio
+const getLabelDivergencia = (d) => {
+    if (d.documento.startsWith('responsavel_')) {
+        const idx = parseInt(d.documento.split('_')[1]);
+        const nome = store.responsaveis[idx]?.nome || `Responsável ${idx + 1}`;
+        return `Novo RG - ${nome}`;
+    }
+    return `Novo arquivo - ${d.titulo}`;
+};
+
+// 4. Ajuste no Reenvio para injetar o arquivo no lugar certo (Anexos ou Responsáveis)
 const reenviarDivergentes = async () => {
   loadingReenvioDivergente.value = true;
   try {
-    const payloadKeys = divergenciasIa.value.map((d) => mapDocumentoParaAnexo(d.documento));
-    const possuiArquivo = payloadKeys.some((k) => arquivosCorrecao.value[k]);
+    const divergentes = divergenciasIa.value;
+    const chavesParaProcessar = divergentes.map(d => d.documento);
+    
+    const possuiArquivo = chavesParaProcessar.some(k => arquivosCorrecao.value[k]);
     if (!possuiArquivo) {
       toast.warning('Anexe ao menos um documento divergente para reenviar.');
       return;
     }
+    
     const protocolo = store.protocolo || store.perfilSalvo?.protocolo;
     const cpf = store.beneficiario?.cpf || store.perfilSalvo?.cpf;
     const dataNascimento = store.beneficiario?.data_nascimento || store.perfilSalvo?.data_nascimento;
+    
     await store.solicitarCorrecaoPrePac();
     const ok = await store.carregarParaEdicao(protocolo, cpf, dataNascimento);
-    if (!ok) {
-      toast.error('Não foi possível abrir o formulário para correção.');
-      return;
-    }
-    Object.keys(arquivosCorrecao.value).forEach((k) => {
-      store.anexos[k] = arquivosCorrecao.value[k] || null;
+    if (!ok) return;
+
+    // Reset de segurança
+    store.anexos = { laudo: null, rg_beneficiario: null, comprovante_residencia: null, foto: null };
+
+    // Distribuição inteligente dos arquivos
+    chavesParaProcessar.forEach((k) => {
+      const file = normalizarArquivoInput(arquivosCorrecao.value[k]);
+      if (!file) return;
+
+      if (k.startsWith('responsavel_')) {
+          const idx = parseInt(k.split('_')[1]);
+          if (store.responsaveis[idx]) {
+              store.responsaveis[idx].documento_identidade = file;
+          }
+      } else {
+          const anexoKey = mapDocumentoParaAnexo(k);
+          store.anexos[anexoKey] = file;
+      }
     });
+
     await store.atualizarExistente();
-    toast.success('Reenvio realizado. A IA irá reprocessar os documentos atualizados.');
+    toast.success('Documentos reenviados para reprocessamento da IA.');
+    store.fasePosEnvio = 'triagem_ia';
+
   } catch (e) {
-    toast.error(e?.response?.data?.erro || 'Falha ao reenviar divergências.');
+    toast.error(e?.response?.data?.erro || 'Falha ao reenviar.');
   } finally {
     loadingReenvioDivergente.value = false;
   }
@@ -834,19 +981,41 @@ const confirmarRecorte = () => {
     }, 'image/jpeg', 0.9);
 };
 
-const getErro = (campo) => {
+// --- VALIDAÇÃO VISUAL DE ERROS ---
+
+const temErrosFormulario = computed(() => Object.keys(store.errosCampos || {}).length > 0);
+
+// Descobre em qual aba estão os erros baseados nas chaves retornadas pelo Django
+const stepErrors = computed(() => {
+    const errs = store.errosCampos || {};
+    const keys = Object.keys(errs);
+    return {
+        1: keys.some(k => ['nome_completo', 'data_nascimento', 'cpf', 'cid', 'cep', 'bairro', 'logradouro', 'numero', 'foto'].includes(k)),
+        2: keys.some(k => k === 'responsaveis'), // O Django agrupa erros da lista nesta chave
+        3: keys.some(k => ['laudo', 'rg_beneficiario', 'comprovante_residencia', 'rg_responsavel'].includes(k))
+    };
+});
+
+// Leitor profundo: consegue ler 'nome_completo' ou 'responsaveis[0].nome'
+const getErro = (campoPath) => {
     try {
         if (!store.errosCampos) return '';
         
-        // Tenta acesso direto
-        if (store.errosCampos[campo]) return store.errosCampos[campo];
+        // Converte a string 'responsaveis[0].nome' num array de chaves: ['responsaveis', '0', 'nome']
+        const parts = campoPath.replace(/\[(\d+)\]/g, '.$1').split('.');
+        let current = store.errosCampos;
         
-        // Se não achou, retorna vazio sem quebrar
-        return '';
+        for (let part of parts) {
+            if (current[part] === undefined) return '';
+            current = current[part];
+        }
+        
+        // O Django REST geralmente devolve as mensagens dentro de um array ["Este campo é obrigatório."]
+        return Array.isArray(current) ? current[0] : current;
     } catch (e) {
         return '';
     }
-}
+};
 </script>
 
 <style scoped>

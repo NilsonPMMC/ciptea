@@ -32,6 +32,28 @@ class BeneficiarioSerializer(serializers.ModelSerializer):
         model = Beneficiario
         fields = '__all__'
 
+    # NOVO: Trava de Maioridade na API
+    def validate(self, data):
+        responsaveis_data = data.get('responsaveis') or []
+        
+        # Pega a data da requisição ou do banco de dados (se for edição)
+        data_nascimento = data.get('data_nascimento')
+        if not data_nascimento and self.instance:
+            data_nascimento = self.instance.data_nascimento
+
+        # Verifica se algum responsável declarou ser o próprio beneficiário
+        has_proprio = any(isinstance(r, dict) and r.get('perfil') == 'PROPRIO' for r in responsaveis_data)
+
+        if has_proprio and data_nascimento:
+            hoje = date.today()
+            idade = hoje.year - data_nascimento.year - ((hoje.month, hoje.day) < (data_nascimento.month, data_nascimento.day))
+            if idade < 18:
+                raise serializers.ValidationError({
+                    "data_nascimento": "O beneficiário deve ter 18 anos ou mais para ser o próprio responsável."
+                })
+                
+        return super().validate(data)
+
     def to_internal_value(self, data):
         # multipart/form-data vem como QueryDict: não dá para usar setlist() com lista de dicts
         # (vira string inválida / some o campo) → "responsaveis: Este campo é obrigatório."
@@ -61,31 +83,34 @@ class BeneficiarioSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         responsaveis_data = validated_data.pop('responsaveis', [])
-        
         beneficiario = Beneficiario.objects.create(**validated_data)
         
         for resp_data in responsaveis_data:
+            # AUTO-APROVAÇÃO: Se for o próprio, o documento já foi validado como RG do Beneficiário
+            if resp_data.get('perfil') == 'PROPRIO':
+                resp_data['status_documento'] = 'APROVADO'
+                
             Responsavel.objects.create(beneficiario=beneficiario, **resp_data)
             
         return beneficiario
 
     def update(self, instance, validated_data):
-            # 1. Separa a lista de responsáveis
-            responsaveis_data = validated_data.pop('responsaveis', None)
+        responsaveis_data = validated_data.pop('responsaveis', None)
 
-            # 2. Atualiza os campos do Beneficiário (incluindo a foto)
-            for attr, value in validated_data.items():
-                setattr(instance, attr, value)
-            
-            instance.save()
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
 
-            # 3. Atualiza os Responsáveis (Apaga antigos e cria novos)
-            if responsaveis_data is not None:
-                instance.responsaveis.all().delete()
-                for resp_data in responsaveis_data:
-                    Responsavel.objects.create(beneficiario=instance, **resp_data)
+        if responsaveis_data is not None:
+            instance.responsaveis.all().delete()
+            for resp_data in responsaveis_data:
+                # AUTO-APROVAÇÃO: Mantém a coerência nas edições/reenvios
+                if resp_data.get('perfil') == 'PROPRIO':
+                    resp_data['status_documento'] = 'APROVADO'
+                    
+                Responsavel.objects.create(beneficiario=instance, **resp_data)
 
-            return instance
+        return instance
 
 class DocumentoSerializer(serializers.ModelSerializer):
     class Meta:

@@ -52,27 +52,31 @@
 
                 <div v-else class="w-100">
                     <v-alert
-                        v-if="pipelineEmAndamento"
-                        type="info"
+                        v-if="mostrarPainelIa"
+                        :type="isIaRevisaoManual ? 'warning' : 'info'"
                         variant="tonal"
                         class="mb-4 text-left"
                         border="start"
                     >
-                        <strong>IA em análise</strong><br>
-                        Seus documentos estão em conferência automática no backend.
+                        <strong v-if="isIaRevisaoManual">Ação Necessária</strong>
+                        <strong v-else>IA em análise</strong><br>
+                        <span v-if="isIaRevisaoManual">Foram identificadas divergências. Aceda à análise para corrigir.</span>
+                        <span v-else>Os seus documentos estão em conferência automática no backend.</span>
                     </v-alert>
+
                     <v-btn
-                        v-if="pipelineEmAndamento"
+                        v-if="mostrarPainelIa"
                         block
-                        color="#00C0F3"
+                        :color="isIaRevisaoManual ? 'warning' : '#00C0F3'"
                         height="56"
                         rounded="xl"
                         class="text-white mb-4 elevation-4 text-h6"
-                        prepend-icon="mdi-pulse"
+                        :prepend-icon="isIaRevisaoManual ? 'mdi-file-document-edit-outline' : 'mdi-pulse'"
                         @click="acompanharAnaliseIa"
                     >
-                        ACOMPANHAR ANÁLISE
+                        {{ isIaRevisaoManual ? 'CORRIGIR DIVERGÊNCIAS' : 'ACOMPANHAR ANÁLISE' }}
                     </v-btn>
+
                     <v-alert
                         v-if="pipelineConcluido && iaStatusEfetivo === 'APROVADO_IA'"
                         type="success"
@@ -82,39 +86,6 @@
                     >
                         <strong>Triagem automática concluída</strong><br>
                         Resultado inicial aprovado pela IA.
-                    </v-alert>
-                    <v-alert
-                        v-if="mostrarDivergenciasIa"
-                        type="warning"
-                        variant="tonal"
-                        class="mb-4 text-left"
-                        border="start"
-                    >
-                        <div class="text-subtitle-2 font-weight-bold mb-2">
-                            Divergências detectadas na triagem IA
-                        </div>
-                        <div
-                            v-for="d in iaResumoDivergencias"
-                            :key="`${d.documento}-${d.codigo}`"
-                            class="mb-3"
-                        >
-                            <div class="font-weight-bold">{{ d.titulo }}</div>
-                            <div class="text-caption mb-1">{{ d.codigo }}</div>
-                            <div class="text-body-2">{{ d.motivo }}</div>
-                        </div>
-                        <v-btn
-                            v-if="podeCorrecaoPrePac"
-                            block
-                            color="warning"
-                            height="52"
-                            rounded="xl"
-                            class="text-white mt-2 elevation-2"
-                            prepend-icon="mdi-file-document-edit-outline"
-                            :loading="loadingCorrecaoPrePac"
-                            @click="corrigirAntesPac"
-                        >
-                            CORRIGIR AGORA
-                        </v-btn>
                     </v-alert>
                     <v-alert
                         v-if="isCarteirinhaVencida"
@@ -447,6 +418,8 @@ const pipelineEmAndamento = computed(
 const pipelineConcluido = computed(
     () => Boolean(store.solicitacaoIdTriagem) && Boolean(store.iaResultadoGlobal || store.perfilSalvo?.ia_status)
 );
+const isIaRevisaoManual = computed(() => (store.iaResultadoGlobal || store.perfilSalvo?.ia_status) === 'REVISAO_MANUAL');
+const mostrarPainelIa = computed(() => pipelineEmAndamento.value || isIaRevisaoManual.value);
 const iaStatusEfetivo = computed(() => store.iaResultadoGlobal || store.perfilSalvo?.ia_status || null);
 const iaResumoDivergencias = computed(() => triagemDetalhe.value?.resumo_divergencias || []);
 const mostrarDivergenciasIa = computed(
@@ -519,8 +492,15 @@ const corrigirAntesPac = async () => {
     }
 };
 
-const acompanharAnaliseIa = () => {
+const acompanharAnaliseIa = async () => {
     if (!store.solicitacaoIdTriagem) return;
+    
+    // BLINDAGEM: Recarrega a ficha completa para garantir que os responsáveis existam na memória
+    const perfil = store.perfilSalvo;
+    if (perfil && (!store.responsaveis || store.responsaveis.length === 0)) {
+        await store.carregarParaEdicao(perfil.protocolo, perfil.cpf, perfil.data_nascimento);
+    }
+    
     store.abrirAcompanhamentoTriagem();
     router.push('/cidadao');
 };

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from datetime import date
 from typing import Any
 
@@ -15,6 +16,10 @@ IDENTITY_MINOR_SEMANTIC_FALLBACK = os.getenv(
 IDENTITY_MINOR_NAME_SCORE_MIN = int(os.getenv("IDENTITY_MINOR_NAME_SCORE_MIN", "85"))
 IDENTITY_MINOR_KEYWORD_MIN = int(os.getenv("IDENTITY_MINOR_KEYWORD_MIN", "2"))
 
+def _normalize_name(text: str) -> str:
+    if not text: return ""
+    txt_norm = ''.join(c for c in unicodedata.normalize('NFD', str(text)) if unicodedata.category(c) != 'Mn')
+    return txt_norm.upper().strip()
 
 def _digits(value: str | None) -> str:
     return re.sub(r"\D", "", value or "")
@@ -71,11 +76,12 @@ def _birth_date_matches_text(text: str, expected_birth_date: str | date | None) 
     return ddmmyyyy in digits_blob or yyyymmdd in digits_blob
 
 
-def validate_laudo(text: str) -> dict[str, Any]:
+def validate_laudo(text: str, expected_name: str = None) -> dict[str, Any]:
     body = _clean_text(text).upper()
     # OCR pode introduzir separadores e confundir O/0; normalizamos para busca robusta.
     compact = re.sub(r"[^A-Z0-9]", "", body).replace("O", "0")
     cid_found = re.search(r"(F84\d*|6A02\d*)", compact)
+    
     if not cid_found:
         return {
             "ok": False,
@@ -83,10 +89,40 @@ def validate_laudo(text: str) -> dict[str, Any]:
             "motivo": "CID TEA nao identificado com confianca no laudo.",
             "score": 0,
         }
+
+    # NOVO: Validação de Titularidade (Name Matching Seguro e Estrito)
+    if expected_name:
+        nome_norm = _normalize_name(expected_name)
+        texto_norm = _normalize_name(text)
+
+        # 1. Regra de Ouro: O Primeiro Nome TEM que existir na string exata.
+        primeiro_nome = nome_norm.split()[0] if nome_norm else ""
+        
+        # Abandono do Fuzzy aqui. Busca binária simples:
+        if primeiro_nome not in texto_norm:
+            return {
+                "ok": False,
+                "status": "REVISAO_MANUAL",
+                "motivo": f"CID identificado ({cid_found.group(1)}), mas titularidade falhou (Primeiro nome '{primeiro_nome}' ausente).",
+                "score": 30,
+            }
+
+        # 2. Se o primeiro nome passou, conferimos o resto (ignorando a ordem das palavras)
+        from thefuzz import fuzz
+        match_score = fuzz.token_set_ratio(nome_norm, texto_norm)
+
+        if match_score < 75: 
+            return {
+                "ok": False,
+                "status": "REVISAO_MANUAL",
+                "motivo": f"CID identificado, mas nome completo diverge do beneficiário ({match_score}% de similaridade).",
+                "score": 40,
+            }
+
     return {
         "ok": True,
         "status": "APROVADO_IA",
-        "motivo": f"CID identificado: {cid_found.group(1)}",
+        "motivo": f"CID identificado: {cid_found.group(1)} e Titularidade validada.",
         "score": 100,
     }
 
@@ -178,10 +214,50 @@ def validate_identity(
     }
 
 
-def validate_address(text: str, responsible_names_list: list[str]) -> dict[str, Any]:
-    body = _clean_text(text).upper()
-    names = [n.upper() for n in (responsible_names_list or []) if n]
+def _normalizar_texto(texto: str) -> str:
+    """Remove acentos, converte para minúsculo e limpa pontuações para o Fuzzy Match."""
+    if not texto:
+        return ""
+    texto = unicodedata.normalize('NFKD', str(texto)).encode('ASCII', 'ignore').decode('utf-8')
+    return re.sub(r'[^a-z0-9\s]', '', texto.lower()).strip()
 
+def validate_address(
+    text: str, 
+    responsible_names_list: list[str],
+    logradouro_banco: str = "",
+    numero_banco: str = "",
+    cep_banco: str = ""
+) -> dict:
+    body = text.upper()
+    body_norm = _normalizar_texto(text)
+
+    erros = []
+
+    # 1. Regra de Negócio: Mogi das Cruzes
+    cidade_ok = "MOGI DAS CRUZES" in body or "MOGI" in body_norm
+    if not cidade_ok:
+        erros.append("Comprovante não pertence a Mogi das Cruzes.")
+
+    # 2. Regra de Negócio: Emissão < 90 dias
+    date_matches = re.findall(r"\b(\d{2}[/-]\d{2}[/-]\d{4})\b", body)
+    now = timezone.localdate()
+    date_ok = False
+    parsed_dates = []
+    for date_str in date_matches:
+        try:
+            dt = date_parser.parse(date_str, dayfirst=True).date()
+            parsed_dates.append(dt.isoformat())
+            if 0 <= (now - dt).days <= 90:
+                date_ok = True
+                break  # Uma data válida já é suficiente
+        except Exception:
+            continue
+            
+    if not date_ok:
+        erros.append("Nenhuma data de emissão válida nos últimos 90 dias.")
+
+    # 3. Validação do Titular (Fuzzy)
+    names = [n.upper() for n in (responsible_names_list or []) if n]
     best_name_score = 0
     matched_name = None
     for name in names:
@@ -191,36 +267,47 @@ def validate_address(text: str, responsible_names_list: list[str]) -> dict[str, 
             matched_name = name
 
     name_ok = bool(names) and best_name_score >= 80
+    if not name_ok:
+        erros.append(f"Titular divergente (Score: {best_name_score}).")
 
-    date_matches = re.findall(r"\b(\d{2}[/-]\d{2}[/-]\d{4})\b", body)
-    now = timezone.localdate()
-    date_ok = False
-    parsed_dates: list[str] = []
-    for date_str in date_matches:
-        try:
-            dt = date_parser.parse(date_str, dayfirst=True).date()
-            parsed_dates.append(dt.isoformat())
-            if 0 <= (now - dt).days <= 90:
-                date_ok = True
-        except Exception:
-            continue
+    # 4. Cross-Reference com a Solicitação (Fuzzy e Regex)
+    logradouro_norm = _normalizar_texto(logradouro_banco)
+    score_logradouro = fuzz.partial_ratio(logradouro_norm, body_norm) if logradouro_norm else 0
+    logradouro_ok = score_logradouro >= 75  # 75% de similaridade é a margem de segurança
+    
+    if not logradouro_ok:
+        erros.append(f"Logradouro divergente da solicitação (Score: {score_logradouro}).")
 
-    if not name_ok or not date_ok:
+    # Bônus: Extração de CEP e Número para auditoria/logs
+    cep_clean = re.sub(r'\D', '', cep_banco) if cep_banco else ""
+    cep_encontrado = bool(cep_clean and cep_clean in re.sub(r'\D', '', body))
+    
+    numero_clean = re.sub(r'\D', '', str(numero_banco)) if numero_banco else ""
+    numero_encontrado = bool(numero_clean and numero_clean in re.sub(r'\D', '', body))
+
+    # APROVAÇÃO: Exige Data, Cidade, Titular e Logradouro
+    is_aprovado = date_ok and cidade_ok and name_ok and logradouro_ok
+
+    if not is_aprovado:
         return {
             "ok": False,
             "status": "REVISAO_MANUAL",
-            "motivo": "Comprovante de endereco sem confianca suficiente (nome/data).",
+            "motivo": " | ".join(erros),
             "score_nome": best_name_score,
-            "nome_ok": name_ok,
-            "data_recente_ok": date_ok,
+            "score_logradouro": score_logradouro,
+            "cep_encontrado": cep_encontrado,
+            "numero_encontrado": numero_encontrado,
             "datas_encontradas": parsed_dates,
         }
 
     return {
         "ok": True,
         "status": "APROVADO_IA",
-        "motivo": "Nome de responsavel e data recente identificados no comprovante.",
+        "motivo": "Comprovante validado: Mogi das Cruzes, data recente e endereço cruzado com a solicitação.",
         "score_nome": best_name_score,
         "nome_encontrado": matched_name,
+        "score_logradouro": score_logradouro,
+        "cep_encontrado": cep_encontrado,
+        "numero_encontrado": numero_encontrado,
         "datas_encontradas": parsed_dates,
     }

@@ -98,8 +98,25 @@ class Responsavel(EnderecoMixin):
     telefone2 = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
 
+    documento_identidade = models.FileField(
+        upload_to=get_file_path, 
+        blank=True, 
+        null=True,
+        help_text="Upload do RG ou CNH do Responsável"
+    )
+    status_documento = models.CharField(
+        max_length=20, 
+        choices=[
+            ('PENDENTE', 'Aguardando Análise'), 
+            ('APROVADO', 'Aprovado'), 
+            ('REJEITADO', 'Rejeitado')
+        ],
+        default='PENDENTE'
+    )
+    motivo_rejeicao_documento = models.CharField(max_length=255, blank=True, null=True)
+
     def __str__(self):
-        return f"{self.nome} ({self.perfil}) - Resp. por {self.beneficiario.nome_completo}"
+        return f"{self.nome} ({self.get_perfil_display()}) - Resp. por {self.beneficiario.nome_completo}"
 
 class Solicitacao(models.Model):
     STATUS_CHOICES = [
@@ -146,7 +163,6 @@ class Documento(models.Model):
     TIPO_DOC_CHOICES = [
         ('LAUDO', 'Laudo Médico'),
         ('RG_BENEF', 'RG do Beneficiário'),
-        ('RG_RESP', 'RG do Responsável'),
         ('COMP_RES', 'Comprovante de Residência'),
         ('OUTRO', 'Outro'),
     ]

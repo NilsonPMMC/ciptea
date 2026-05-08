@@ -19,6 +19,7 @@ from django.shortcuts import get_object_or_404
 from django.core.paginator import Paginator
 from django.core.cache import cache
 from .models import Beneficiario, Solicitacao, Documento, Historico, ValidacaoDocumentoIA
+from .tasks import process_ciptea_documents
 from .serializers import (
     BeneficiarioSerializer,
     SolicitacaoSerializer,
@@ -121,6 +122,12 @@ def _enqueue_triagem_ia_apos_commit(solicitacao_id: int):
     _disparar_triagem_ia_async(solicitacao)
 
 
+def _bool_query(value):
+    if value is None:
+        return False
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
 # Status em que o cidadão pode reenviar dados/documentos sem JWT (mesma prova de posse de buscar-completo).
 CIDADAO_PODE_ATUALIZAR_STATUS = frozenset({'PENDENTE', 'ABERTO', 'ANALISE'})
 
@@ -132,10 +139,23 @@ def _solicitacao_cidadao_por_credenciais(protocolo, cpf, data_nascimento):
     """
     if not protocolo or not cpf or not data_nascimento:
         return None
+        
+    # Garante a versão limpa
     cpf_limpo = ''.join(filter(str.isdigit, str(cpf)))
+    
+    # Monta a versão mascarada caso o front tenha mandado limpo
+    if len(cpf_limpo) == 11:
+        cpf_mascarado = f"{cpf_limpo[:3]}.{cpf_limpo[3:6]}.{cpf_limpo[6:9]}-{cpf_limpo[9:]}"
+    else:
+        cpf_mascarado = cpf
+
     return (
         Solicitacao.objects.filter(protocolo=protocolo.strip())
-        .filter(Q(beneficiario__cpf=cpf) | Q(beneficiario__cpf=cpf_limpo))
+        .filter(
+            Q(beneficiario__cpf=cpf) | 
+            Q(beneficiario__cpf=cpf_limpo) | 
+            Q(beneficiario__cpf=cpf_mascarado)
+        )
         .filter(beneficiario__data_nascimento=data_nascimento)
         .select_related('beneficiario')
         .first()
@@ -143,10 +163,12 @@ def _solicitacao_cidadao_por_credenciais(protocolo, cpf, data_nascimento):
 
 
 def _pode_correcao_ia_pre_pac(solicitacao):
-    # Regra de negócio: correção IA pelo cidadão só é permitida enquanto
-    # a solicitação ainda estiver em ABERTO (antes de entrar em análise do PAC).
-    if not solicitacao or solicitacao.status != 'ABERTO':
+    # Regra de negócio: correção IA pelo cidadão é permitida enquanto
+    # a solicitação estiver em ABERTO (1ª vez) ou ANALISE (reenvios da IA).
+    if not solicitacao or solicitacao.status not in ['ABERTO', 'ANALISE']:
         return False
+        
+    # Garante que a ficha ainda não foi assumida por um humano do PAC
     return not solicitacao.historico.exclude(autor='Portal CIPTEA').filter(
         tipo_evento__in=['ANALISE', 'PENDENCIA', 'CONCLUSAO', 'INDEFERIDO']
     ).exists()
@@ -239,31 +261,74 @@ class BeneficiarioViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'], permission_classes=[AllowAny], url_path='atualizacao-cidadao')
     def atualizacao_cidadao(self, request, pk=None):
-        """
-        Atualização do beneficiário pelo fluxo público (correção / renovação), sem JWT.
-        Exige query: protocolo, cpf, data_nascimento — mesma prova de posse de buscar-completo.
-        """
         protocolo = request.query_params.get('protocolo')
         cpf = request.query_params.get('cpf')
         data_nascimento = request.query_params.get('data_nascimento')
         solicitacao = _solicitacao_cidadao_por_credenciais(protocolo, cpf, data_nascimento)
+
         if not solicitacao or solicitacao.beneficiario_id != int(pk):
-            return Response(
-                {'erro': 'Solicitação não encontrada ou dados não conferem com o beneficiário.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        if solicitacao.status not in CIDADAO_PODE_ATUALIZAR_STATUS:
-            return Response(
-                {'erro': 'Esta solicitação não aceita atualização pelo formulário público no status atual.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        instance = self.get_object()
-        data = self._normalize_responsaveis_payload(request.data)
+            return Response({'erro': 'Solicitação não encontrada ou dados não conferem.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # GATILHO DA IA: Se receber o sinal de conclusão, muda o status, acorda a IA e finaliza!
+        if str(request.data.get('concluir_correcao', '')).lower() in ['true', '1']:
+            solicitacao.status = 'ANALISE'
+            solicitacao.save(update_fields=['status'])
+            from django.db import transaction
+            from cadastro.tasks import process_ciptea_documents
+            transaction.on_commit(lambda pk=solicitacao.id: process_ciptea_documents.apply_async(args=[pk], queue='ia_tasks'))
+            return Response({'status': 'ANALISE'})
+
+        instance = self.get_object() 
+        
+        # 1. Anti-Wipe: Protege os responsáveis
+        data = request.data.copy()
+        responsaveis_payload = data.pop('responsaveis', None)
+        if isinstance(responsaveis_payload, list) and len(responsaveis_payload) > 0:
+            responsaveis_payload = responsaveis_payload[0]
+            
         serializer = self.get_serializer(instance, data=data, partial=True)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
-        return Response(serializer.data)
+        
+        # 2. Atualização segura de texto
+        if responsaveis_payload:
+            import json
+            try:
+                resp_list = json.loads(responsaveis_payload) if isinstance(responsaveis_payload, str) else responsaveis_payload
+                responsaveis_atuais = list(instance.responsaveis.all().order_by('id'))
+                for i, resp_data in enumerate(resp_list):
+                    if i < len(responsaveis_atuais):
+                        r_obj = responsaveis_atuais[i]
+                        r_obj.nome = resp_data.get('nome', r_obj.nome)
+                        r_obj.cpf = resp_data.get('cpf', r_obj.cpf)
+                        r_obj.telefone = resp_data.get('telefone', r_obj.telefone)
+                        r_obj.perfil = resp_data.get('perfil', r_obj.perfil)
+                        r_obj.save(update_fields=['nome', 'cpf', 'telefone', 'perfil'])
+            except Exception:
+                pass
 
+        # 3. Atualização segura de arquivos (RGs dos Responsáveis)
+        responsaveis_db = list(instance.responsaveis.all().order_by('id'))
+        
+        # Identifica o documento de identidade do beneficiário (enviado agora ou já existente no banco)
+        # Nota: Ajuste 'documento_identidade' caso o campo no seu model Beneficiario tenha outro nome
+        doc_beneficiario = request.FILES.get('rg_beneficiario') or getattr(instance, 'documento_identidade', None)
+
+        for i, resp in enumerate(responsaveis_db):
+            arquivo_novo = request.FILES.get(f'rg_responsavel_{i}')
+            
+            if arquivo_novo:
+                # Prioridade 1: Arquivo enviado especificamente para o responsável
+                resp.documento_identidade = arquivo_novo
+                resp.status_documento = 'PENDENTE'
+                resp.save(update_fields=['documento_identidade', 'status_documento'])
+                
+            elif resp.perfil == 'PROPRIO' and doc_beneficiario:
+                # Prioridade 2: Perfil "Próprio" reaproveita o documento do beneficiário
+                # Isso evita o erro de "Documento não enviado" no pipeline da IA
+                resp.documento_identidade = doc_beneficiario
+                resp.status_documento = 'PENDENTE'
+                resp.save(update_fields=['documento_identidade', 'status_documento'])
 
 class SolicitacaoViewSet(viewsets.ModelViewSet):
     queryset = Solicitacao.objects.all().order_by('-data_solicitacao')
@@ -514,15 +579,35 @@ class SolicitacaoViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], permission_classes=[AllowAny], url_path='cadastro-completo')
     def cadastro_completo(self, request):
-        dados_beneficiario = request.data.copy()
-        for campo_anexo in ('laudo', 'rg_beneficiario', 'comprovante_residencia', 'rg_responsavel'):
-            dados_beneficiario.pop(campo_anexo, None)
+        # 1. Isolamento de dados
+        dados_beneficiario = {}
+        anexos_solicitacao = ['laudo', 'rg_beneficiario', 'comprovante_residencia']
+        
+        # Deixamos o 'responsaveis' passar para o Serializer trabalhar normalmente
+        for key in request.data:
+            if key in anexos_solicitacao or key.startswith('rg_responsavel_'):
+                continue
+            dados_beneficiario[key] = request.data.get(key)
+            
+        if 'foto' in request.FILES:
+            dados_beneficiario['foto'] = request.FILES['foto']
 
         with transaction.atomic():
+            # 2. O Serializer cria o Beneficiário e os Responsáveis
             serializer_beneficiario = BeneficiarioSerializer(data=dados_beneficiario)
             serializer_beneficiario.is_valid(raise_exception=True)
             beneficiario = serializer_beneficiario.save()
 
+            # 3. Anexamos os arquivos nos responsáveis recém-criados
+            responsaveis_criados = list(beneficiario.responsaveis.all().order_by('id'))
+            for i, resp in enumerate(responsaveis_criados):
+                arquivo_rg = request.FILES.get(f'rg_responsavel_{i}')
+                if arquivo_rg:
+                    resp.documento_identidade = arquivo_rg
+                    resp.status_documento = 'PENDENTE'
+                    resp.save()
+
+            # 4. Criação da Solicitação e Histórico
             solicitacao = Solicitacao.objects.create(
                 beneficiario=beneficiario,
                 status='ABERTO',
@@ -531,16 +616,16 @@ class SolicitacaoViewSet(viewsets.ModelViewSet):
             Historico.objects.create(
                 solicitacao=solicitacao,
                 titulo='Solicitação criada',
-                mensagem='Cadastro inicial realizado pelo cidadão.',
+                mensagem='Cadastro inicial realizado com múltiplos responsáveis.',
                 autor='Portal CIPTEA',
                 tipo_evento='CRIACAO',
             )
 
+            # 5. Salva os anexos da Solicitação (Laudo, RG Benef., Endereço)
             anexos_map = (
                 ('laudo', 'LAUDO', 'Laudo Médico'),
                 ('rg_beneficiario', 'RG_BENEF', 'RG do Beneficiário'),
                 ('comprovante_residencia', 'COMP_RES', 'Comprovante Residência'),
-                ('rg_responsavel', 'RG_RESP', 'RG do Responsável'),
             )
             for campo, tipo, descricao in anexos_map:
                 arquivo = request.FILES.get(campo)
@@ -553,20 +638,17 @@ class SolicitacaoViewSet(viewsets.ModelViewSet):
                         status='PENDENTE',
                     )
 
+        # 6. Finalização e Enfileiramento da IA
         total = _incrementar_metrica_cadastro(METRICA_CADASTRO_TRANSACIONAL)
         logger.info('cadastro_flow=transacional total=%s protocolo=%s', total, solicitacao.protocolo)
-        solicitacao_pk = solicitacao.id
-        transaction.on_commit(lambda pk=solicitacao_pk: _enqueue_triagem_ia_apos_commit(pk))
+        transaction.on_commit(lambda pk=solicitacao.id: process_ciptea_documents.apply_async(args=[pk], queue='ia_tasks'))
 
         return Response({
             'beneficiario_id': beneficiario.id,
             'solicitacao_id': solicitacao.id,
             'protocolo': solicitacao.protocolo,
             'status': solicitacao.status,
-            'pipeline': {
-                'status': 'PROCESSANDO',
-                'mensagem': 'Triagem automática enfileirada. Acompanhe pelo endpoint de triagem.',
-            },
+            'pipeline': {'status': 'PROCESSANDO', 'mensagem': 'Triagem automática iniciada.'},
         }, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=False, methods=['get'], url_path='metricas-cadastro')
@@ -771,36 +853,30 @@ class SolicitacaoViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(solicitacao)
         return Response(serializer.data)
 
-    @action(detail=True, methods=['patch'], permission_classes=[AllowAny], url_path='atualizacao-cidadao')
+    @action(detail=True, methods=['patch'], permission_classes=[AllowAny], url_path='atualizacao-cidadao-status')
     def atualizacao_cidadao(self, request, pk=None):
-        """
-        Atualização limitada da solicitação pelo cidadão (ex.: status ANALISE após correções).
-        Query: protocolo, cpf, data_nascimento — mesma prova de posse de buscar-completo.
-        """
         protocolo = request.query_params.get('protocolo')
         cpf = request.query_params.get('cpf')
         data_nascimento = request.query_params.get('data_nascimento')
         solicitacao = _solicitacao_cidadao_por_credenciais(protocolo, cpf, data_nascimento)
+
         if not solicitacao or solicitacao.id != int(pk):
             return Response(
-                {'erro': 'Solicitação não encontrada ou dados não conferem.'},
+                {'erro': 'Solicitação não encontrada.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if solicitacao.status not in CIDADAO_PODE_ATUALIZAR_STATUS:
-            return Response(
-                {'erro': 'Esta solicitação não aceita atualização pelo formulário público no status atual.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            
         novo_status = request.data.get('status')
-        if novo_status != 'ANALISE':
-            return Response(
-                {'erro': "Por esta rota só é permitido reenviar à análise (status 'ANALISE')."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        serializer = self.get_serializer(solicitacao, data={'status': 'ANALISE'}, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
+        if novo_status:
+            solicitacao.status = novo_status
+            solicitacao.save(update_fields=['status'])
+            
+            if novo_status == 'ANALISE':
+                from django.db import transaction
+                from cadastro.tasks import process_ciptea_documents
+                transaction.on_commit(lambda pk=solicitacao.id: process_ciptea_documents.apply_async(args=[pk], queue='ia_tasks'))
+            
+        return Response({'status': solicitacao.status})
 
     @action(detail=True, methods=['get'], url_path='triagem-ia')
     def triagem_ia(self, request, pk=None):
@@ -838,21 +914,29 @@ class SolicitacaoViewSet(viewsets.ModelViewSet):
         cpf = request.query_params.get('cpf')
         data_nascimento = request.query_params.get('data_nascimento')
         solicitacao = _solicitacao_cidadao_por_credenciais(protocolo, cpf, data_nascimento)
+
         if not solicitacao or solicitacao.id != int(pk):
             return Response(
                 {'erro': 'Solicitação não encontrada ou dados não conferem.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if not _pode_correcao_ia_pre_pac(solicitacao):
+
+        # Validação unificada: permite ABERTO (primeiro envio) e ANALISE (reenvios)
+        if solicitacao.status not in ['ABERTO', 'ANALISE']:
             return Response(
-                {'erro': "Correção prévia indisponível: só é permitida enquanto a solicitação estiver em 'ABERTO'."},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'erro': "Correção prévia indisponível: o status atual não permite edição."},
+                status=status.HTTP_400_BAD_REQUEST
             )
+
+        # Removemos o check '_pode_correcao_ia_pre_pac' pois ele estava gerando o conflito do Erro 400
+
         solicitacao.status = 'PENDENTE'
         solicitacao.save(update_fields=['status'])
+
         mensagem = (request.data.get('mensagem') or '').strip() or (
             'Cidadão solicitou correção após divergências identificadas na triagem de IA.'
         )
+
         Historico.objects.create(
             solicitacao=solicitacao,
             titulo='Correção solicitada pelo cidadão',
@@ -860,6 +944,7 @@ class SolicitacaoViewSet(viewsets.ModelViewSet):
             autor='Portal CIPTEA',
             tipo_evento='PENDENCIA',
         )
+
         return Response({'ok': True, 'status': solicitacao.status})
     
 def gerar_carteira_pdf(request, protocolo):  
@@ -937,6 +1022,8 @@ class DocumentoViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         documento = serializer.save()
         sid = documento.solicitacao_id
+        if _bool_query(self.request.query_params.get('suppress_triagem')):
+            return
         transaction.on_commit(lambda pk=sid: _enqueue_triagem_ia_apos_commit(pk))
 
     def perform_update(self, serializer):
@@ -945,4 +1032,6 @@ class DocumentoViewSet(viewsets.ModelViewSet):
         else:
             documento = serializer.save()
         sid = documento.solicitacao_id
+        if _bool_query(self.request.query_params.get('suppress_triagem')):
+            return
         transaction.on_commit(lambda pk=sid: _enqueue_triagem_ia_apos_commit(pk))

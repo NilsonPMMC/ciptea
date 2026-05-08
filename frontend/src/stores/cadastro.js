@@ -4,6 +4,11 @@ import axios from 'axios';
 
 const onlyDigits = (value) => (value || '').toString().replace(/\D/g, '');
 const sanitizeText = (value) => (value || '').toString().replace(/\u0000/g, '').trim();
+const normalizeUploadFile = (value) => {
+  if (!value) return null;
+  if (Array.isArray(value)) return value[0] || null;
+  return value;
+};
 
 /** Última mensagem de pendência/correção gravada no histórico (parecer do PAC). */
 function mensagemParecerDoHistorico(historico) {
@@ -250,7 +255,7 @@ export const useCadastroStore = defineStore('cadastro', {
     },
 
     responsaveis: [
-      { nome: '', cpf: '', telefone: '', perfil: null }
+      { nome: '', cpf: '', telefone: '', perfil: null, documento_identidade: null }
     ],
 
     anexos: {
@@ -355,6 +360,17 @@ export const useCadastroStore = defineStore('cadastro', {
           }
 
           this.modoEdicao = true;
+          
+          // LIMPEZA CRÍTICA: Zera os anexos da memória para evitar 
+          // reenvio fantasma de arquivos da primeira tentativa
+          this.anexos = {
+            laudo: null,
+            rg_beneficiario: null,
+            comprovante_residencia: null, 
+            rg_responsavel: null,
+            foto: null
+          };
+
           return true;
 
       } catch (e) {
@@ -420,7 +436,7 @@ export const useCadastroStore = defineStore('cadastro', {
             complemento: sanitizeText(this.beneficiario.complemento),
         }));
         formData.append('responsaveis', JSON.stringify(responsaveisPayload));
-
+        
         // 5. Fluxo transacional preferencial (backend novo)
         const formDataCompleto = new FormData();
         for (const [key, value] of formData.entries()) {
@@ -429,7 +445,16 @@ export const useCadastroStore = defineStore('cadastro', {
         if (this.anexos.laudo) formDataCompleto.append('laudo', this.anexos.laudo);
         if (this.anexos.rg_beneficiario) formDataCompleto.append('rg_beneficiario', this.anexos.rg_beneficiario);
         if (this.anexos.comprovante_residencia) formDataCompleto.append('comprovante_residencia', this.anexos.comprovante_residencia);
-        if (this.anexos.rg_responsavel) formDataCompleto.append('rg_responsavel', this.anexos.rg_responsavel);
+
+        this.responsaveis.forEach((resp, index) => {
+          if (resp.documento_identidade && resp.documento_identidade instanceof File) {
+              formDataCompleto.append(`rg_responsavel_${index}`, resp.documento_identidade);
+          } else if (resp.perfil === 'PROPRIO' && this.anexos.rg_beneficiario) {
+              // NOVO: Clona silenciosamente o RG do Beneficiário para o Responsável.
+              // A IA fará o OCR e vai aprovar com nota 100, destravando a Revisão Manual!
+              formDataCompleto.append(`rg_responsavel_${index}`, this.anexos.rg_beneficiario);
+          }
+        });
 
         let responseCadastroCompleto = null;
         try {
@@ -806,14 +831,14 @@ export const useCadastroStore = defineStore('cadastro', {
           });
 
           // B. Foto do Perfil (Só envia se o usuário selecionou uma nova no input)
-          // Nota: this.anexos.foto guarda o arquivo 'File' novo. 
-          if (this.anexos.foto) {
+          if (this.anexos.foto && this.anexos.foto instanceof File) {
               formData.append('foto', this.anexos.foto);
           }
 
           // C. Responsáveis (Lista)
           // Precisamos reenviar a lista para o backend atualizar os vínculos
           const responsaveisPayload = this.responsaveis.map((resp) => ({
+              id: resp.id,
               nome: sanitizeText(resp.nome),
               cpf: onlyDigits(resp.cpf),
               telefone: onlyDigits(resp.telefone),
@@ -827,6 +852,12 @@ export const useCadastroStore = defineStore('cadastro', {
               complemento: sanitizeText(this.beneficiario.complemento),
           }));
           formData.append('responsaveis', JSON.stringify(responsaveisPayload));
+
+          this.responsaveis.forEach((resp, index) => {
+            if (resp.documento_identidade && resp.documento_identidade instanceof File) {
+                formData.append(`rg_responsavel_${index}`, resp.documento_identidade);
+            }
+          });
 
           const qCidadao = queryCorrecaoCidadao(
             this.protocolo,
@@ -850,47 +881,51 @@ export const useCadastroStore = defineStore('cadastro', {
 
           // 2. FUNÇÃO INTELIGENTE DE UPLOAD DE DOCUMENTOS
           const processarDocumento = async (arquivoInput, docExistente, tipo) => {
-              // Se o usuário não selecionou arquivo novo, ignora
-              if (!arquivoInput) return;
+            const arquivo = normalizeUploadFile(arquivoInput);
+            
+            // BLINDAGEM: Se não houver arquivo ou se não for um Objeto File real, ignora e não envia nada!
+            if (!arquivo || !(arquivo instanceof File)) return;
 
-              const docData = new FormData();
-              docData.append('arquivo', arquivoInput);
-              
-              // Força status PENDENTE para o fiscal analisar de novo
-              docData.append('status', 'PENDENTE'); 
-              docData.append('motivo_rejeicao', '');
+            const docData = new FormData();
+            docData.append('arquivo', arquivo);
+            
+            // Força status PENDENTE para o fiscal analisar de novo
+            docData.append('status', 'PENDENTE'); 
+            docData.append('motivo_rejeicao', '');
 
-              if (docExistente && docExistente.id) {
-                  // Cenario A: Substitui documento existente (PATCH)
-                  await api.patch(`documentos/${docExistente.id}/`, docData, {
-                      headers: { 'Content-Type': 'multipart/form-data' }
-                  });
-              } else {
-                  // Cenario B: Cria documento novo que faltava (POST)
-                  docData.append('solicitacao', this.idSolicitacaoEdicao);
-                  docData.append('tipo', tipo);
-                  await api.post('documentos/', docData, {
-                      headers: { 'Content-Type': 'multipart/form-data' }
-                  });
-              }
+            if (docExistente && docExistente.id) {
+                // Cenario A: Substitui documento existente (PATCH) silencioso
+                await api.patch(`documentos/${docExistente.id}/?suppress_triagem=1`, docData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+            } else {
+                // Cenario B: Cria documento novo que faltava (POST) silencioso
+                docData.append('solicitacao', this.idSolicitacaoEdicao);
+                docData.append('tipo', tipo);
+                await api.post('documentos/?suppress_triagem=1', docData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+            }
           };
-
+          
           // 3. PROCESSA CADA TIPO DE DOCUMENTO
           await processarDocumento(this.anexos.laudo, this.statusLaudo, 'LAUDO');
           await processarDocumento(this.anexos.rg_beneficiario, this.statusRgBenef, 'RG_BENEF');
           await processarDocumento(this.anexos.comprovante_residencia, this.statusCompRes, 'COMP_RES');
-          await processarDocumento(this.anexos.rg_responsavel, this.statusRgResp, 'RG_RESP');
 
-          // 4. ATUALIZA STATUS DA SOLICITAÇÃO
-          // Move de 'PENDENTE' (Vermelho) para 'ANALISE' (Amarelo) no Kanban
+          // 4. ATUALIZA STATUS E ACORDA A IA (Via BeneficiarioViewSet)
+          const formDataFinal = new FormData();
+          formDataFinal.append('concluir_correcao', 'true');
+
           await api.patch(
-            `solicitacoes/${this.idSolicitacaoEdicao}/atualizacao-cidadao/?${qCidadao}`,
-            { status: 'ANALISE' }
+            `beneficiarios/${this.beneficiario.id}/atualizacao-cidadao/?${qCidadao}`,
+            formDataFinal,
+            { headers: { 'Content-Type': 'multipart/form-data' } }
           );
 
           this.solicitacaoIdTriagem = this.idSolicitacaoEdicao;
           this.fasePosEnvio = 'triagem_ia';
-          this.iaTriagemAutoRedirect = true;
+          this.iaTriagemAutoRedirect = false;
           this.limparModoCorrecaoSomenteAnexos();
           this.success = false;
           this.iniciarTriagemIaPolling();
@@ -956,7 +991,7 @@ export const useCadastroStore = defineStore('cadastro', {
     },
 
     adicionarResponsavel() {
-      this.responsaveis.push({ nome: '', cpf: '', telefone: '', perfil: null });
+      this.responsaveis.push({ nome: '', cpf: '', telefone: '', perfil: null, documento_identidade: null });
     },
 
     removerResponsavel(index) {

@@ -129,6 +129,13 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Celery
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/1')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/1')
+CELERY_WORKER_SEND_TASK_EVENTS = os.getenv('CELERY_WORKER_SEND_TASK_EVENTS', 'False').lower() in ('1', 'true', 'yes', 'on')
+CELERY_WORKER_DISABLE_GOSSIP = os.getenv('CELERY_WORKER_DISABLE_GOSSIP', 'True').lower() in ('1', 'true', 'yes', 'on')
+CELERY_WORKER_DISABLE_MINGLE = os.getenv('CELERY_WORKER_DISABLE_MINGLE', 'True').lower() in ('1', 'true', 'yes', 'on')
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
